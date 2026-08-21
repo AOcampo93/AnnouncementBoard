@@ -1,0 +1,1942 @@
+/* ============================================================
+   Quadro de Avisos — camada de vista
+   Sem dependências. Encaminhamento por hash sobre a History API,
+   estado durável no Arquivo (store.js).
+   ============================================================ */
+
+/* ---------- Estado de ecrã (o que não precisa de sobreviver a um F5) ---------- */
+
+const estado = {
+  ecra: 'feed',
+  boardId: 'ala',
+  postId: null,
+  seccao: 'feed',        // secção da barra de navegação em destaque
+  query: '',
+  filtro: null,          // tipo de aviso em filtro
+  ordem: 'recentes',
+  blocks: [],            // ordem das partes no formulário
+  valores: {},           // conteúdo escrito, por parte
+  editingId: null,
+  mode: 'mine',
+  picked: [],
+  camada: null,          // sobreposição aberta
+  eliminado: null        // último aviso eliminado, para anular
+};
+
+/* ---------- Utilitários ---------- */
+
+const $  = (sel, raiz = document) => raiz.querySelector(sel);
+const $$ = (sel, raiz = document) => Array.from(raiz.querySelectorAll(sel));
+
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const ico = (nome, cls = 'ico') =>
+  `<svg class="${cls}" aria-hidden="true"><use href="#i-${nome}"></use></svg>`;
+
+const plural = (n, um, muitos) => n + ' ' + (n === 1 ? um : muitos);
+
+const quadro = (id) => BOARDS.find((b) => b.id === id) || null;
+const nomeQuadro = (id) => (quadro(id) || {}).name || '';
+
+const sessao = () => Arquivo.sessao();
+const temSessao = () => !!Arquivo.sessao();
+const ehAdmin = () => Arquivo.demo().role === 'admin';
+const selos = () => Arquivo.demo().stamps;
+
+/* Um aviso está por ler se o Arquivo o diz e o interruptor global está ligado. */
+const porLer = (p) => Arquivo.porLer(p) && selos();
+
+/* Etiqueta dos quadros de um aviso: um nome, ou o primeiro mais a contagem. */
+function etiquetaQuadros(p) {
+  const ids = p.boards || [];
+  if (!ids.length) return '';
+  if (ids.length === 1) return nomeQuadro(ids[0]);
+  return nomeQuadro(ids[0]) + ' +' + (ids.length - 1);
+}
+
+function agoraLegivel() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return 'Hoje · ' + hh + ':' + mm;
+}
+
+/* Uma imagem carregada pelo utilizador desenha-se a sério; a da semente
+   continua a ser o marcador tramado do desenho original. */
+function imagem(obj, classe, alt) {
+  if (obj && obj.dataUrl) {
+    return `<img class="${classe} img" src="${obj.dataUrl}" alt="${esc(alt || obj.legenda || '')}">`;
+  }
+  const legenda = obj ? (obj.legenda || '') + (obj.medidas ? ' · ' + obj.medidas : '') : '';
+  return `<span class="ph ${classe}">${esc(legenda)}</span>`;
+}
+
+async function copiar(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+    return true;
+  } catch (err) {
+    try {
+      const t = document.createElement('textarea');
+      t.value = texto;
+      t.setAttribute('readonly', '');
+      t.style.cssText = 'position:fixed;left:-9999px';
+      document.body.appendChild(t);
+      t.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(t);
+      return ok;
+    } catch (err2) { return false; }
+  }
+}
+
+/* ---------- Mensagens (sobrevivem à mudança de ecrã) ---------- */
+
+let relogioAviso = null;
+
+function aviso(texto, accao) {
+  const caixa = $('#toast');
+  caixa.innerHTML = `
+    <span class="toast__texto">${esc(texto)}</span>
+    ${accao ? `<button class="toast__accao" data-act="${accao.act}"${accao.id ? ` data-id="${accao.id}"` : ''}>${esc(accao.etiqueta)}</button>` : ''}
+    <button class="toast__fechar" data-act="fechar-aviso" aria-label="Fechar mensagem">${ico('close')}</button>`;
+  caixa.hidden = false;
+  clearTimeout(relogioAviso);
+  relogioAviso = setTimeout(limparAviso, accao ? 6000 : 3400);
+}
+
+function limparAviso() {
+  clearTimeout(relogioAviso);
+  const caixa = $('#toast');
+  caixa.hidden = true;
+  caixa.innerHTML = '';
+}
+
+/* ---------- Encaminhamento ---------- */
+
+const ROTAS = [
+  { re: /^$/,                        ecra: 'feed' },
+  { re: /^\/$/,                      ecra: 'feed' },
+  { re: /^\/novidades$/,             ecra: 'feed' },
+  { re: /^\/quadros$/,               ecra: 'boards' },
+  { re: /^\/quadro\/([\w-]+)$/,      ecra: 'board',  chave: 'boardId' },
+  { re: /^\/aviso\/([\w-]+)$/,       ecra: 'post',   chave: 'postId' },
+  { re: /^\/procurar$/,              ecra: 'search' },
+  { re: /^\/entrar$/,                ecra: 'login' },
+  { re: /^\/publicar$/,              ecra: 'compose' },
+  { re: /^\/publicar\/destino$/,     ecra: 'targets' },
+  { re: /^\/editar\/([\w-]+)$/,      ecra: 'compose', chave: 'editId' },
+  { re: /^\/a-minha-conta$/,         ecra: 'mine' }
+];
+
+const PRIVADAS = ['compose', 'targets', 'mine'];
+
+if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+
+let indice = (history.state && history.state.i) || 0;
+let veioDeVoltar = false;
+let aFecharCamada = false;
+
+function guardarPosicao() {
+  try {
+    history.replaceState(Object.assign({}, history.state, { i: indice, y: window.scrollY }), '');
+  } catch (err) { /* sem history */ }
+}
+
+function ir(hash) {
+  limparAviso();
+  if (location.hash === hash) { encaminhar(); return; }
+  guardarPosicao();
+  indice += 1;
+  history.pushState({ i: indice, y: 0 }, '', hash);
+  encaminhar();
+}
+
+/* Reencaminhamento automático: substitui, nunca empurra, para o botão
+   «voltar» do navegador não ficar preso num ciclo. */
+function substituir(hash) {
+  history.replaceState({ i: indice, y: 0 }, '', hash);
+  encaminhar();
+}
+
+/* Volta a sério: se há para onde recuar, recua; senão vai ao pai indicado. */
+function voltar(reserva) {
+  if (indice > 0) { guardarPosicao(); history.back(); return; }
+  substituir(reserva || '#/novidades');
+}
+
+function partesDoHash() {
+  const cru = (location.hash || '').replace(/^#/, '');
+  const [caminho, consulta] = cru.split('?');
+  const params = {};
+  (consulta || '').split('&').filter(Boolean).forEach((par) => {
+    const [k, v] = par.split('=');
+    params[decodeURIComponent(k)] = decodeURIComponent(v || '');
+  });
+  // tolerar barra final
+  return { caminho: caminho.replace(/\/+$/, '') || '/', params: params };
+}
+
+function encaminhar() {
+  const { caminho, params } = partesDoHash();
+
+  let achado = null;
+  for (const r of ROTAS) {
+    const m = caminho.match(r.re);
+    if (m) { achado = { ecra: r.ecra, chave: r.chave, valor: m[1] }; break; }
+  }
+
+  // Rota desconhecida: corrige o endereço em vez de fingir que é o feed.
+  if (!achado) { substituir('#/novidades'); return; }
+
+  let ecra = achado.ecra;
+
+  if (achado.chave === 'boardId') {
+    if (!quadro(achado.valor)) { estado.ecra = 'perdido'; estado.perdido = 'quadro'; desenhar(); return; }
+    estado.boardId = achado.valor;
+  }
+  if (achado.chave === 'postId') {
+    if (!Arquivo.aviso(achado.valor)) { estado.ecra = 'perdido'; estado.perdido = 'aviso'; desenhar(); return; }
+    estado.postId = achado.valor;
+  }
+  if (achado.chave === 'editId') {
+    const alvo = Arquivo.aviso(achado.valor);
+    if (!alvo) { estado.ecra = 'perdido'; estado.perdido = 'aviso'; desenhar(); return; }
+    if (estado.editingId !== alvo.id) carregarParaEdicao(alvo);
+  }
+
+  // Guardião das rotas privadas: reencaminha a sério e guarda a intenção.
+  if (PRIVADAS.indexOf(ecra) > -1 && !temSessao()) {
+    substituir('#/entrar?destino=' + encodeURIComponent(location.hash || '#/a-minha-conta'));
+    return;
+  }
+  // Com sessão, o ecrã de entrada não tem razão de ser.
+  if (ecra === 'login' && temSessao()) {
+    substituir(params.destino || '#/a-minha-conta');
+    return;
+  }
+  // Não se escolhe destino sem haver aviso nenhum para publicar.
+  if (ecra === 'targets' && !estado.blocks.length) {
+    substituir('#/publicar');
+    aviso('Adicione primeiro uma parte ao aviso.');
+    return;
+  }
+
+  // Um quadro passado na consulta pré-escolhe o destino.
+  if (ecra === 'compose' && params.quadro && quadro(params.quadro) && !estado.blocks.length) {
+    estado.mode = 'pick';
+    estado.picked = [params.quadro];
+  }
+
+  // Chegar a #/publicar por ligação direta tem de dar um formulário utilizável,
+  // não uma folha sem um único campo.
+  if (ecra === 'compose' && !estado.editingId && !estado.blocks.length) {
+    estado.blocks = PARTES_DE_ORIGEM.slice();
+  }
+
+  estado.ecra = ecra;
+  estado.destinoAposEntrar = params.destino || null;
+
+  // A secção em destaque segue a origem: um aviso aberto pela procura
+  // mantém «Procurar» marcado, não «Novidades».
+  const mapa = {
+    feed: 'feed', boards: 'boards', board: 'boards', search: 'search',
+    login: 'mine', compose: 'mine', targets: 'mine', mine: 'mine'
+  };
+  if (mapa[ecra]) estado.seccao = mapa[ecra];
+
+  desenhar();
+
+  const y = veioDeVoltar && history.state && history.state.y;
+  veioDeVoltar = false;
+  window.scrollTo(0, y || 0);
+}
+
+window.addEventListener('popstate', (e) => {
+  if (aFecharCamada) { aFecharCamada = false; return; }
+  // Uma sobreposição aberta consome o primeiro «voltar».
+  if (estado.camada && !(e.state && e.state.camada)) {
+    estado.camada = null;
+    desenharCamadas();
+    return;
+  }
+  indice = (e.state && e.state.i) || 0;
+  veioDeVoltar = true;
+  encaminhar();
+});
+
+/* ---------- Sobreposições ---------- */
+
+function abrirCamada(camada) {
+  const jaAberta = !!estado.camada;
+  estado.camada = camada;
+  if (!jaAberta) {
+    indice += 1;
+    history.pushState({ i: indice, camada: camada.tipo }, '', location.hash);
+  }
+  desenharCamadas();
+}
+
+function fecharCamada(semRecuar) {
+  if (!estado.camada) return;
+  estado.camada = null;
+  desenharCamadas();
+  if (!(history.state && history.state.camada)) return;
+  if (semRecuar) {
+    // Quem fecha e navega a seguir não pode esperar pelo popstate:
+    // reescreve-se a entrada em vez de recuar.
+    history.replaceState({ i: indice }, '', location.hash);
+    return;
+  }
+  aFecharCamada = true;
+  indice = Math.max(0, indice - 1);
+  history.back();
+}
+
+/* ---------- Navegação principal ---------- */
+
+const NAV = [
+  { id: 'feed',   etiqueta: 'Novidades',      hash: '#/novidades',     ico: 'feed' },
+  { id: 'boards', etiqueta: 'Quadros',        hash: '#/quadros',       ico: 'folder' },
+  { id: 'search', etiqueta: 'Procurar',       hash: '#/procurar',      ico: 'search' },
+  { id: 'mine',   etiqueta: 'A minha conta', curto: 'Conta', hash: '#/a-minha-conta', ico: 'user' }
+];
+
+const hashDaNav = (n) => (n.id === 'mine' && !temSessao() ? '#/entrar' : n.hash);
+
+/* ---------- Peças reutilizáveis ---------- */
+
+function selo(p) {
+  return porLer(p) ? '<span class="stamp">NOVO</span>' : '';
+}
+
+function fichaAviso(p) {
+  const heroi = p.hero;
+  return `
+    <button class="notice" data-act="abrir-aviso" data-id="${p.id}">
+      <span class="notice__head">
+        <span class="notice__board">${esc(etiquetaQuadros(p))}</span>
+        <span class="notice__date tnum">${esc(p.date)}</span>
+      </span>
+      <span class="notice__body">
+        <span class="notice__text">
+          <span class="flags">
+            <span class="tag">${esc(p.kind)}</span>
+            ${selo(p)}
+          </span>
+          <span class="notice__title">${esc(p.title)}</span>
+          <span class="notice__summary">${esc(p.summary)}</span>
+        </span>
+        ${heroi ? `<span class="notice__thumb-wrap">${imagem(heroi, 'notice__thumb', p.title)}</span>` : ''}
+      </span>
+    </button>`;
+}
+
+function barra(reserva, titulo, opcoes) {
+  const o = opcoes || {};
+  return `
+    <div class="appbar">
+      <button class="iconbtn" data-act="voltar" data-hash="${reserva}" aria-label="Voltar">${ico('back')}</button>
+      <div class="${o.discreto ? 'appbar__kicker' : 'appbar__title'}">${titulo}</div>
+      ${o.accoes || ''}
+    </div>`;
+}
+
+function botaoCriar(quadroId) {
+  if (!temSessao()) {
+    return `<button class="btn btn--kraft" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`;
+  }
+  const destino = quadroId ? `#/publicar?quadro=${quadroId}` : '#/publicar';
+  return `<button class="btn btn--solid btn--compacto" data-act="novo-aviso" data-hash="${destino}">${ico('plus')} Novo aviso</button>`;
+}
+
+/* Fila de filtros por tipo, com contagem. */
+function filtros(lista) {
+  const contas = {};
+  lista.forEach((p) => { contas[p.kind] = (contas[p.kind] || 0) + 1; });
+  const usados = TIPOS.filter((t) => contas[t]);
+  if (usados.length < 2) return '';
+  return `
+    <div class="chips chips--filtro" role="group" aria-label="Filtrar por tipo">
+      ${usados.map((t) => `
+        <button class="chip chip--sm" data-act="filtro" data-tipo="${esc(t)}"
+                aria-pressed="${estado.filtro === t}">${esc(t)} <span class="chip__n tnum">${contas[t]}</span></button>`).join('')}
+      ${estado.filtro ? `<button class="chip chip--sm chip--limpar" data-act="filtro" data-tipo="">${ico('close')} Limpar</button>` : ''}
+    </div>`;
+}
+
+const aplicarFiltro = (lista) => (estado.filtro ? lista.filter((p) => p.kind === estado.filtro) : lista);
+
+function vazio(texto, botoes) {
+  return `
+    <div class="empty">
+      <p class="empty__texto">${texto}</p>
+      ${botoes ? `<div class="empty__accoes">${botoes}</div>` : ''}
+    </div>`;
+}
+
+/* ---------- Ecrãs ---------- */
+
+function ecraFeed() {
+  const todos = Arquivo.avisos();
+  const lista = aplicarFiltro(todos);
+  const naoLidos = todos.filter(porLer).length;
+
+  return `
+    <div class="masthead">
+      <div class="masthead__text">
+        <p class="eyebrow">Sexta-feira, 21 de agosto</p>
+        <h1 class="page-title" tabindex="-1">Novidades</h1>
+        <p class="lede" aria-live="polite">
+          ${naoLidos > 0
+            ? `${plural(naoLidos, 'aviso por ler', 'avisos por ler')} nos ${BOARDS.length} quadros da ala`
+            : `Está em dia. ${plural(todos.length, 'aviso', 'avisos')} nos ${BOARDS.length} quadros da ala`}
+        </p>
+      </div>
+      <div class="masthead__actions">
+        ${naoLidos > 0 ? `<button class="btn btn--quiet btn--compacto" data-act="ler-tudo">${ico('check')} Marcar tudo como lido</button>` : ''}
+        ${botaoCriar(null)}
+      </div>
+    </div>
+    <div class="wrap">
+      ${filtros(todos)}
+      <div class="stack grid-notices">
+        ${lista.length
+          ? lista.map(fichaAviso).join('')
+          : vazio(
+              estado.filtro
+                ? `Não há avisos do tipo «${esc(estado.filtro)}».`
+                : 'Ainda não há avisos em nenhum quadro.',
+              estado.filtro
+                ? '<button class="btn btn--kraft" data-act="filtro" data-tipo="">Ver todos os avisos</button>'
+                : botaoCriar(null)
+            )}
+      </div>
+    </div>`;
+}
+
+function ecraQuadros() {
+  return `
+    <div class="masthead">
+      <div class="masthead__text">
+        <h1 class="page-title" tabindex="-1">Quadros</h1>
+        <p class="lede">Escolha uma pasta para ver os seus avisos</p>
+      </div>
+      <div class="masthead__actions">${botaoCriar(null)}</div>
+    </div>
+    <div class="folders">
+      ${BOARDS.map((b) => {
+        const n = Arquivo.doQuadro(b.id);
+        const novos = n.filter(porLer).length;
+        return `
+          <button class="folder" data-act="abrir-quadro" data-id="${b.id}">
+            <span class="folder__tab"></span>
+            <span class="folder__body">
+              <span class="folder__name">${esc(b.name)}</span>
+              <span class="folder__foot">
+                ${novos ? `<span class="dot"></span>` : ''}
+                <span class="folder__count tnum">${novos ? plural(novos, 'por ler', 'por ler') : plural(n.length, 'aviso', 'avisos')}</span>
+              </span>
+            </span>
+          </button>`;
+      }).join('')}
+    </div>`;
+}
+
+function ecraQuadro() {
+  const todos = Arquivo.doQuadro(estado.boardId);
+  let lista = aplicarFiltro(todos);
+  if (estado.ordem === 'antigos') lista = lista.slice().reverse();
+  const podePublicar = temSessao() && Arquivo.quadrosPermitidos().indexOf(estado.boardId) > -1;
+
+  return `
+    <div class="boardhead">
+      <div class="appbar">
+        <button class="iconbtn" data-act="voltar" data-hash="#/quadros" aria-label="Voltar aos quadros">${ico('back')}</button>
+        <h1 class="appbar__title" tabindex="-1">${esc(nomeQuadro(estado.boardId))}</h1>
+        ${podePublicar
+          ? `<button class="iconbtn" data-act="novo-aviso" data-hash="#/publicar?quadro=${estado.boardId}" aria-label="Novo aviso neste quadro">${ico('plus')}</button>`
+          : ''}
+      </div>
+      <div class="boardtabs" role="tablist" aria-label="Quadros">
+        ${BOARDS.map((b) => `
+          <button class="boardtab" role="tab"
+                  aria-selected="${b.id === estado.boardId}"
+                  tabindex="${b.id === estado.boardId ? '0' : '-1'}"
+                  data-act="abrir-quadro" data-id="${b.id}">${esc(b.short)}</button>`).join('')}
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="barra-lista">
+        ${filtros(todos)}
+        ${todos.length > 1 ? `
+          <button class="chip chip--sm" data-act="ordem">
+            ${ico('sort')} ${estado.ordem === 'recentes' ? 'Mais recentes' : 'Mais antigos'}
+          </button>` : ''}
+      </div>
+      <div class="stack grid-notices">
+        ${lista.length
+          ? lista.map((p) => `
+            <button class="pinned" data-act="abrir-aviso" data-id="${p.id}">
+              <span class="pinned__meta">
+                <span class="mono tnum">${esc(p.date)}</span>
+                ${selo(p)}
+                <span class="tag tag--plain">${esc(p.kind)}</span>
+              </span>
+              <span class="pinned__title">${esc(p.title)}</span>
+              <span class="pinned__summary">${esc(p.summary)}</span>
+            </button>`).join('')
+          : vazio(
+              estado.filtro ? `Não há avisos do tipo «${esc(estado.filtro)}» neste quadro.` : 'Este quadro ainda não tem avisos.',
+              estado.filtro
+                ? '<button class="btn btn--kraft" data-act="filtro" data-tipo="">Ver todos</button>'
+                : (podePublicar ? botaoCriar(estado.boardId) : '')
+            )}
+      </div>
+    </div>`;
+}
+
+function ecraAviso() {
+  const p = Arquivo.aviso(estado.postId);
+  if (!p) return ecraPerdido('aviso');
+
+  const meu = temSessao() && p.autorId === sessao().utilizador;
+  const podeGerir = meu || (ehAdmin() && temSessao());
+  const relacionados = Arquivo.doQuadro((p.boards || [])[0]).filter((x) => x.id !== p.id).slice(0, 3);
+
+  const iconeAnexo = { map: 'map', pdf: 'download', phone: 'phone', link: 'link' };
+
+  return `
+    ${barra('#/novidades', `<button class="link-quadro" data-act="abrir-quadro" data-id="${(p.boards || [])[0]}">${esc(etiquetaQuadros(p))}</button>`, {
+      discreto: true,
+      accoes: `
+        <button class="iconbtn" data-act="partilhar" data-id="${p.id}" aria-label="Partilhar este aviso">${ico('share')}</button>
+        ${podeGerir ? `<button class="iconbtn" data-act="editar" data-id="${p.id}" aria-label="Editar este aviso">${ico('edit')}</button>` : ''}
+        ${podeGerir ? `<button class="iconbtn iconbtn--perigo" data-act="pedir-eliminar" data-id="${p.id}" aria-label="Eliminar este aviso">${ico('trash')}</button>` : ''}`
+    })}
+    <article class="post">
+      <header class="post__head">
+        <div class="post__flags">
+          <span class="tag">${esc(p.kind)}</span>
+          ${selo(p)}
+          <span class="mono tnum">${esc(p.date)}</span>
+        </div>
+        <h1 class="post__title" tabindex="-1">${esc(p.title)}</h1>
+      </header>
+
+      <div class="post__main">
+        ${p.hero ? `<button class="hero-btn" data-act="foto" data-id="${p.id}" data-i="-1" aria-label="Ampliar a imagem principal">${imagem(p.hero, 'hero', p.title)}</button>` : ''}
+
+        <div class="prose">
+          ${(p.body || []).map((t) => `<p>${esc(t)}</p>`).join('')}
+        </div>
+
+        ${(p.gallery || []).length ? `
+          <section>
+            <p class="eyebrow">Galeria · ${plural(p.gallery.length, 'foto', 'fotos')}</p>
+            <div class="gallery">
+              ${p.gallery.map((g, i) => `
+                <button class="gal" data-act="foto" data-id="${p.id}" data-i="${i}"
+                        aria-label="Ampliar ${esc(g.legenda || 'foto ' + (i + 1))}">
+                  ${imagem(g, 'gal__img', g.legenda)}
+                </button>`).join('')}
+            </div>
+          </section>` : ''}
+
+        <p class="byline">Publicado por ${esc(p.author)}${p.authorRole ? ' · ' + esc(p.authorRole) : ''}</p>
+
+        ${relacionados.length ? `
+          <section class="relacionados">
+            <p class="eyebrow">Mais avisos deste quadro</p>
+            <div class="relacionados__lista">
+              ${relacionados.map((r) => `
+                <button class="rel" data-act="abrir-aviso" data-id="${r.id}">
+                  <span class="mono tnum">${esc(r.date)}</span>
+                  <span class="rel__titulo">${esc(r.title)}</span>
+                </button>`).join('')}
+            </div>
+          </section>` : ''}
+      </div>
+
+      <aside class="post__aside">
+        ${p.when ? `
+          <div class="when">
+            <p class="eyebrow eyebrow--dark">Quando e onde</p>
+            <p class="when__day">${esc(p.when.day)}</p>
+            <p class="when__time">${esc(p.when.time)}${p.when.place ? ' · ' + esc(p.when.place) : ''}</p>
+          </div>` : ''}
+
+        ${(p.links || []).length ? `
+          <div class="attachments">
+            ${p.links.map((l, i) => `
+              <button class="attach ${l.type === 'map' ? 'attach--map' : ''}" data-act="anexo" data-id="${p.id}" data-i="${i}">
+                ${ico(iconeAnexo[l.type] || 'link')}
+                <span class="attach__label">${esc(l.label)}</span>
+                <span class="attach__meta">${esc(l.meta)}</span>
+              </button>`).join('')}
+          </div>` : ''}
+
+        ${p.contact ? `
+          <div class="contact">
+            <p class="eyebrow eyebrow--dark">Contactos</p>
+            <p class="contact__name">${esc(p.contact.name)}</p>
+            <a class="contact__tel tnum" href="tel:${esc(String(p.contact.phone).replace(/\s/g, ''))}">
+              ${ico('phone')} ${esc(p.contact.phone)}
+            </a>
+            <button class="btn btn--sm btn--quiet" data-act="copiar-numero" data-valor="${esc(p.contact.phone)}">
+              ${ico('copy')} Copiar número
+            </button>
+            <p class="contact__note">${esc(p.contact.note)}</p>
+          </div>` : ''}
+      </aside>
+    </article>`;
+}
+
+function ecraProcurar() {
+  return `
+    <div class="masthead searchhead">
+      <div class="masthead__text" style="width:100%">
+        <h1 class="page-title" tabindex="-1">Procurar</h1>
+        <form class="procura" role="search" data-act="procura-form">
+          <span class="procura__ico">${ico('search')}</span>
+          <input class="field procura__campo" id="q" type="search" value="${esc(estado.query)}"
+                 placeholder="Atividade, jovens, serviço…" autocomplete="off"
+                 aria-label="Procurar avisos">
+          <button class="procura__limpar" type="button" data-act="limpar-procura"
+                  ${estado.query ? '' : 'hidden'} aria-label="Limpar a procura">${ico('close')}</button>
+        </form>
+        <div class="chips">
+          ${QUICK_SEARCHES.map((q) => `
+            <button class="chip" data-act="atalho" data-q="${esc(q)}"
+                    aria-pressed="${estado.query.trim().toLowerCase() === q.toLowerCase()}">${esc(q)}</button>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="wrap">
+      <p class="contagem" id="contagem" aria-live="polite">${textoContagem()}</p>
+      <div id="results" class="stack grid-notices">${resultados()}</div>
+    </div>`;
+}
+
+function acertos() {
+  const q = estado.query.trim().toLowerCase();
+  const todos = Arquivo.avisos();
+  if (!q) return todos;
+  return todos.filter((p) =>
+    (p.title + ' ' + p.summary + ' ' + p.kind + ' ' + (p.boards || []).map(nomeQuadro).join(' '))
+      .toLowerCase().indexOf(q) > -1);
+}
+
+function textoContagem() {
+  const n = acertos().length;
+  const q = estado.query.trim();
+  return q ? `${plural(n, 'aviso', 'avisos')} com «${q}»` : plural(n, 'aviso', 'avisos');
+}
+
+function resultados() {
+  const lista = acertos();
+  if (!lista.length) {
+    return vazio(
+      `Não há avisos com «${esc(estado.query.trim())}». Experimente uma palavra mais curta.`,
+      '<button class="btn btn--kraft" data-act="limpar-procura">Limpar procura</button>'
+    );
+  }
+  return lista.map((p) => `
+    <button class="resultcard" data-act="abrir-aviso" data-id="${p.id}">
+      <span class="mono tnum">${esc(etiquetaQuadros(p))} · ${esc(p.date)}</span>
+      <span class="resultcard__title">${esc(p.title)}</span>
+      <span class="flags"><span class="tag tag--plain">${esc(p.kind)}</span>${selo(p)}</span>
+    </button>`).join('');
+}
+
+function ecraEntrar() {
+  const destino = estado.destinoAposEntrar;
+  return `
+    <div class="login">
+      <p class="eyebrow">Acesso para responsáveis</p>
+      <h1 class="login__title" tabindex="-1">Entrar</h1>
+      <p class="lede">
+        Só os líderes e responsáveis de cada quadro precisam de utilizador.
+        Para ler os avisos não é preciso.
+      </p>
+      ${destino ? `<p class="nota">Depois de entrar volta a ${esc(nomeDoDestino(destino))}.</p>` : ''}
+
+      <form class="stack" id="form-entrar" novalidate>
+        <label class="label">Utilizador ou e-mail
+          <input class="field" type="text" name="utilizador" id="campo-utilizador"
+                 autocomplete="username" placeholder="o.seu.nome">
+        </label>
+        <label class="label">Palavra-passe
+          <span class="palavra">
+            <input class="field" type="password" name="palavra" id="campo-palavra"
+                   autocomplete="current-password" placeholder="A sua palavra-passe">
+            <button class="palavra__olho" type="button" data-act="ver-palavra" aria-label="Mostrar a palavra-passe">${ico('eye')}</button>
+          </span>
+        </label>
+        <p class="erro" id="erro-entrar" role="alert" hidden></p>
+        <button class="btn btn--solid btn--block" type="submit">Entrar</button>
+        <button class="btn btn--quiet btn--block" type="button" data-act="conta-exemplo">
+          Usar conta de exemplo
+        </button>
+        <button class="btn btn--quiet btn--block" type="button" data-act="ir" data-hash="#/novidades">
+          Ver avisos sem entrar
+        </button>
+      </form>
+
+      <p class="login__foot">Qualquer utilizador e qualquer palavra-passe entram: isto é uma demonstração.</p>
+    </div>`;
+}
+
+function nomeDoDestino(hash) {
+  const mapa = {
+    '#/publicar': 'criar o aviso',
+    '#/publicar/destino': 'escolher o destino',
+    '#/a-minha-conta': 'a sua conta'
+  };
+  return mapa[hash] || 'onde estava';
+}
+
+/* ---------- Criar / editar aviso ---------- */
+
+function campoDoBloco(chave) {
+  const b = BLOCKS[chave];
+  const v = estado.valores[chave];
+  const idc = 'c-' + chave;
+
+  if (b.campo === 'texto') {
+    return `<input class="field" id="${idc}" type="text" data-campo="${chave}" maxlength="${b.max || 120}"
+                   value="${esc(v || '')}" placeholder="${esc(b.hint)}">`;
+  }
+  if (b.campo === 'area') {
+    return `<textarea class="field field--area" id="${idc}" rows="5" data-campo="${chave}"
+                      placeholder="${esc(b.hint)}">${esc(v || '')}</textarea>`;
+  }
+  if (b.campo === 'datahora') {
+    return `<input class="field" id="${idc}" type="datetime-local" data-campo="${chave}" value="${esc(v || '')}">`;
+  }
+  if (b.campo === 'url') {
+    return `<input class="field" id="${idc}" type="url" inputmode="url" data-campo="${chave}"
+                   value="${esc(v || '')}" placeholder="${esc(b.hint)}">`;
+  }
+  if (b.campo === 'telefone') {
+    return `<input class="field" id="${idc}" type="tel" inputmode="tel" data-campo="${chave}"
+                   value="${esc(v || '')}" placeholder="${esc(b.hint)}">`;
+  }
+  if (b.campo === 'ficheiro') {
+    const ehPdf = b.accept === 'application/pdf';
+    if (v) {
+      return `
+        <div class="ficheiro">
+          ${ehPdf
+            ? `<span class="ficheiro__pdf">${ico('file')}</span>`
+            : `<img class="ficheiro__img" src="${v.dataUrl}" alt="${esc(v.nome)}">`}
+          <span class="ficheiro__info">
+            <span class="ficheiro__nome">${esc(v.nome)}</span>
+            <span class="ficheiro__meta tnum">${esc(v.medidas || v.tamanho || '')}</span>
+          </span>
+          <label class="btn btn--sm btn--quiet">Trocar
+            <input type="file" class="sr" data-ficheiro="${chave}" accept="${b.accept}">
+          </label>
+          <button class="btn btn--sm btn--quiet" data-act="limpar-ficheiro" data-chave="${chave}">${ico('close')} Retirar</button>
+        </div>`;
+    }
+    return `
+      <label class="drop" data-largar="${chave}">
+        ${ico(ehPdf ? 'file' : 'image', 'ico drop__ico')}
+        <span>${esc(b.hint)}</span>
+        <input type="file" class="sr" data-ficheiro="${chave}" accept="${b.accept}">
+      </label>`;
+  }
+  if (b.campo === 'ficheiros') {
+    const fotos = Array.isArray(v) ? v : [];
+    return `
+      <div class="galeria-edit">
+        ${fotos.map((f, i) => `
+          <span class="galeria-edit__item">
+            <img src="${f.dataUrl}" alt="${esc(f.nome)}">
+            <button class="galeria-edit__x" data-act="tirar-foto" data-chave="${chave}" data-i="${i}"
+                    aria-label="Retirar ${esc(f.nome)}">${ico('close')}</button>
+          </span>`).join('')}
+        <label class="drop drop--pequeno" data-largar="${chave}">
+          ${ico('plus', 'ico drop__ico')}
+          <span>${fotos.length ? 'Mais fotos' : esc(b.hint)}</span>
+          <input type="file" class="sr" multiple data-ficheiro="${chave}" accept="${b.accept}">
+        </label>
+      </div>`;
+  }
+  return '';
+}
+
+function ecraCriar() {
+  const editar = !!estado.editingId;
+  const disponiveis = ORDEM_BLOCOS.filter((k) => estado.blocks.indexOf(k) < 0);
+  const semTitulo = !String(estado.valores.titulo || '').trim();
+  const podeAvancar = estado.blocks.length > 0 && !semTitulo;
+
+  return `
+    ${barra(editar ? '#/aviso/' + estado.editingId : '#/a-minha-conta',
+      `<span class="passo">${editar ? 'A editar' : 'Passo 1 de 2'} · Conteúdo</span>
+       <span class="appbar__title">${editar ? 'Editar aviso' : 'Criar aviso'}</span>`,
+      { accoes: `<button class="iconbtn iconbtn--perigo" data-act="descartar" aria-label="Descartar este aviso">${ico('trash')}</button>` })}
+
+    <div class="compose wrap">
+      <div class="compose__main stack">
+        <p class="lede">Adicione apenas as partes de que precisar. Pode retirá-las quando quiser.</p>
+
+        ${estado.blocks.length ? estado.blocks.map((chave, i) => {
+          const b = BLOCKS[chave];
+          return `
+            <div class="block" data-bloco="${chave}">
+              <div class="block__head">
+                <span class="block__label">${esc(b.label)}</span>
+                <span class="block__ferramentas">
+                  <button class="iconbtn iconbtn--mini" data-act="mover" data-i="${i}" data-d="-1"
+                          ${i === 0 ? 'disabled' : ''} aria-label="Subir ${esc(b.label)}">${ico('up')}</button>
+                  <button class="iconbtn iconbtn--mini" data-act="mover" data-i="${i}" data-d="1"
+                          ${i === estado.blocks.length - 1 ? 'disabled' : ''} aria-label="Descer ${esc(b.label)}">${ico('down')}</button>
+                  <button class="btn btn--sm btn--quiet" data-act="tirar-bloco" data-i="${i}">Retirar</button>
+                </span>
+              </div>
+              ${campoDoBloco(chave)}
+            </div>`;
+        }).join('') : vazio('O aviso está vazio. Adicione uma parte para começar.')}
+
+        <div class="compose__avancar">
+          <button class="btn btn--solid btn--block" data-act="ir"
+                  data-hash="${editar ? '#/publicar/destino' : '#/publicar/destino'}"
+                  ${podeAvancar ? '' : 'disabled'}>
+            ${editar ? 'Rever o destino' : 'Escolher onde publicar'}
+          </button>
+          ${!podeAvancar ? `<p class="nota nota--aviso">${estado.blocks.length ? 'Escreva o título do aviso para continuar.' : 'Adicione pelo menos uma parte.'}</p>` : ''}
+        </div>
+      </div>
+
+      <div class="compose__side">
+        <p class="eyebrow">Adicionar parte</p>
+        <div class="palette">
+          ${disponiveis.length
+            ? disponiveis.map((k) => `
+                <button class="btn btn--kraft" data-act="juntar-bloco" data-chave="${k}">
+                  ${ico('plus')} ${esc(BLOCKS[k].label)}
+                </button>`).join('')
+            : '<p class="nota">Já está a usar todas as partes.</p>'}
+        </div>
+      </div>
+    </div>`;
+}
+
+function ecraDestino() {
+  const permitidos = Arquivo.quadrosPermitidos();
+  const editar = !!estado.editingId;
+
+  const modos = [
+    { id: 'mine', etiqueta: 'Só no meu quadro', nota: nomeQuadro(sessao() ? sessao().board : 'socorro') },
+    { id: 'pick', etiqueta: 'Escolher quadros', nota: 'Marque um a um' },
+    { id: 'all',  etiqueta: 'Todos os quadros', nota: 'Veem-no todas as organizações' }
+  ];
+
+  const alvos = destinosResolvidos();
+  const podePublicar = alvos.length > 0;
+
+  return `
+    ${barra(editar ? '#/editar/' + estado.editingId : '#/publicar',
+      `<span class="passo">${editar ? 'A editar' : 'Passo 2 de 2'} · Destino</span>
+       <span class="appbar__title">Onde vai ser publicado?</span>`,
+      { accoes: `<button class="iconbtn" data-act="previsualizar" aria-label="Pré-visualizar o aviso">${ico('eye')}</button>` })}
+
+    <div class="wrap targets stack">
+      <div class="resumo">
+        <p class="eyebrow eyebrow--dark">Resumo</p>
+        <p class="resumo__titulo">${esc(estado.valores.titulo || 'Sem título')}</p>
+        <p class="resumo__partes">${estado.blocks.map((k) => esc(BLOCKS[k].label)).join(' · ')}</p>
+        <button class="btn btn--sm btn--quiet" data-act="previsualizar">${ico('eye')} Pré-visualizar</button>
+      </div>
+
+      <div role="radiogroup" aria-label="Onde publicar" class="stack">
+        ${modos.map((m) => {
+          const bloqueado = m.id === 'all' && !ehAdmin();
+          return `
+            <button class="mode ${bloqueado ? 'mode--locked' : ''}" role="radio"
+                    aria-checked="${!bloqueado && estado.mode === m.id}"
+                    ${bloqueado ? 'aria-disabled="true"' : ''}
+                    data-act="${bloqueado ? 'modo-bloqueado' : 'modo'}" data-mode="${m.id}">
+              <span class="radio"></span>
+              <span>
+                <span class="mode__label">${esc(m.etiqueta)}</span>
+                <span class="mode__note">${bloqueado ? 'A sua permissão não chega para isto' : esc(m.nota)}</span>
+              </span>
+              ${bloqueado ? `<span class="mode__cadeado">${ico('lock')}</span>` : ''}
+            </button>`;
+        }).join('')}
+      </div>
+
+      ${estado.mode === 'pick' ? `
+        <div class="picker" role="group" aria-label="Quadros de destino">
+          <p class="eyebrow eyebrow--dark">Marque os quadros</p>
+          <div class="stack" style="gap:10px">
+            ${BOARDS.map((b) => {
+              const pode = permitidos.indexOf(b.id) > -1;
+              return `
+                <button class="checkrow ${pode ? '' : 'checkrow--locked'}" role="checkbox"
+                        aria-checked="${estado.picked.indexOf(b.id) > -1}"
+                        ${pode ? '' : 'aria-disabled="true"'}
+                        data-act="${pode ? 'marcar' : 'modo-bloqueado'}" data-id="${b.id}">
+                  <span class="check">${ico('check')}</span>
+                  <span>${esc(b.name)}</span>
+                  ${pode ? '' : `<span class="mode__cadeado">${ico('lock')}</span>`}
+                </button>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+
+      <div class="destino-final">
+        <p class="nota">${alvos.length
+          ? 'Vai ser publicado em: <strong>' + alvos.map((id) => esc(nomeQuadro(id))).join(', ') + '</strong>'
+          : 'Escolha pelo menos um quadro.'}</p>
+        <button class="btn btn--solid btn--block" data-act="publicar" ${podePublicar ? '' : 'disabled'}>
+          ${editar ? 'Guardar alterações' : 'Publicar aviso'}
+        </button>
+      </div>
+    </div>`;
+}
+
+function destinosResolvidos() {
+  const permitidos = Arquivo.quadrosPermitidos();
+  if (estado.mode === 'all') return ehAdmin() ? BOARDS.map((b) => b.id) : [];
+  if (estado.mode === 'pick') return estado.picked.filter((id) => permitidos.indexOf(id) > -1);
+  const meu = sessao() ? sessao().board : null;
+  return meu && permitidos.indexOf(meu) > -1 ? [meu] : [];
+}
+
+function ecraConta() {
+  const s = sessao();
+  const { proprios, administrados } = Arquivo.meus();
+  const papel = ehAdmin() ? 'Pode publicar em todos os quadros' : 'Responsável · ' + nomeQuadro(s.board);
+  const rascunho = Arquivo.rascunho();
+
+  return `
+    <div class="account">
+      <p class="eyebrow eyebrow--dark">${esc(papel)}</p>
+      <h1 class="account__name" tabindex="-1">${esc(s.nome)}</h1>
+      <p class="account__user mono">@${esc(s.utilizador)}</p>
+    </div>
+    <div class="wrap stack">
+      <button class="btn btn--solid btn--block" data-act="novo-aviso" data-hash="#/publicar">
+        ${ico('plus')} Novo aviso
+      </button>
+
+      ${rascunho ? `
+        <div class="rascunho">
+          <span>${ico('edit')} Rascunho por terminar: <strong>${esc(rascunho.valores && rascunho.valores.titulo || 'sem título')}</strong></span>
+          <span class="rascunho__accoes">
+            <button class="btn btn--sm btn--kraft" data-act="retomar-rascunho">Retomar</button>
+            <button class="btn btn--sm btn--quiet" data-act="deitar-rascunho">Deitar fora</button>
+          </span>
+        </div>` : ''}
+
+      <p class="eyebrow" style="margin-top:14px">Os meus avisos · ${proprios.length}</p>
+      <div class="mine-grid stack">
+        ${proprios.length ? proprios.map((p) => fichaGestao(p, true)).join('')
+          : vazio('Ainda não publicou nenhum aviso.',
+                  '<button class="btn btn--kraft" data-act="novo-aviso" data-hash="#/publicar">Criar o primeiro aviso</button>')}
+      </div>
+
+      ${administrados.length ? `
+        <p class="eyebrow" style="margin-top:22px">Que administra · ${administrados.length}</p>
+        <div class="mine-grid stack">
+          ${administrados.map((p) => fichaGestao(p, ehAdmin())).join('')}
+        </div>` : ''}
+
+      <button class="btn btn--quiet btn--block" data-act="sair" style="margin-top:26px">
+        Sair da minha conta
+      </button>
+    </div>`;
+}
+
+function fichaGestao(p, podeEliminar) {
+  return `
+    <div class="minecard">
+      <p class="minecard__meta tnum">${esc(p.date)} · ${esc(etiquetaQuadros(p))}</p>
+      <p class="minecard__title">${esc(p.title)}</p>
+      <div class="minecard__actions">
+        <button class="btn btn--quiet btn--sm" data-act="abrir-aviso" data-id="${p.id}">${ico('eye')} Ver</button>
+        <button class="btn btn--kraft btn--sm" data-act="editar" data-id="${p.id}">${ico('edit')} Editar</button>
+        ${podeEliminar
+          ? `<button class="btn btn--danger btn--sm" data-act="pedir-eliminar" data-id="${p.id}">${ico('trash')} Eliminar</button>`
+          : ''}
+      </div>
+    </div>`;
+}
+
+function ecraPerdido(tipo) {
+  const eAviso = tipo !== 'quadro';
+  return `
+    ${barra('#/novidades', eAviso ? 'Aviso não encontrado' : 'Quadro não encontrado')}
+    <div class="wrap">
+      ${vazio(
+        eAviso
+          ? 'Este aviso já não está disponível. Pode ter sido eliminado.'
+          : 'Este quadro não existe. Talvez o endereço esteja trocado.',
+        `<button class="btn btn--kraft" data-act="ir" data-hash="#/novidades">${ico('feed')} Ver novidades</button>
+         <button class="btn btn--quiet" data-act="ir" data-hash="#/procurar">${ico('search')} Procurar</button>`
+      )}
+    </div>`;
+}
+
+const ECRAS = {
+  feed: ecraFeed, boards: ecraQuadros, board: ecraQuadro, post: ecraAviso,
+  search: ecraProcurar, login: ecraEntrar, compose: ecraCriar,
+  targets: ecraDestino, mine: ecraConta,
+  perdido: () => ecraPerdido(estado.perdido)
+};
+
+/* ---------- Desenho ---------- */
+
+const SUPERFICIE = { boards: 'cork', board: 'cork' };
+
+function desenhar() {
+  $('#view').innerHTML = (ECRAS[estado.ecra] || ecraFeed)();
+  $('#main').dataset.surface = SUPERFICIE[estado.ecra] || 'paper';
+  desenharNav();
+  desenharCamadas();
+}
+
+function desenharNav() {
+  $$('[data-nav]').forEach((el) => {
+    const n = NAV.find((x) => x.id === el.dataset.nav);
+    el.setAttribute('aria-current', el.dataset.nav === estado.seccao ? 'page' : 'false');
+    el.dataset.hash = hashDaNav(n);
+  });
+
+  $$('[data-railboard]').forEach((el) => {
+    el.setAttribute('aria-current', String(estado.ecra === 'board' && el.dataset.railboard === estado.boardId));
+    const lista = Arquivo.doQuadro(el.dataset.railboard);
+    const novos = lista.filter(porLer).length;
+    el.querySelector('.n').textContent = novos || lista.length;
+    el.querySelector('.n').classList.toggle('n--novo', novos > 0);
+    el.querySelector('.dot').style.visibility = novos > 0 ? 'visible' : 'hidden';
+  });
+
+  const cartao = $('#rail-user');
+  if (cartao) {
+    const s = sessao();
+    cartao.dataset.act = 'ir';
+    cartao.dataset.hash = s ? '#/a-minha-conta' : '#/entrar';
+    cartao.innerHTML = s
+      ? `<span class="rail__username">${esc(s.nome)}</span>
+         <span class="rail__role">${esc(ehAdmin() ? 'Administra todos os quadros' : 'Responsável · ' + nomeQuadro(s.board))}</span>`
+      : `<span class="rail__username">Modo de leitura</span>
+         <span class="rail__role">Entre para publicar avisos</span>`;
+  }
+
+  const cta = $('#rail-cta');
+  if (cta) {
+    cta.innerHTML = temSessao()
+      ? `<button class="btn btn--solid btn--block btn--compacto" data-act="novo-aviso" data-hash="#/publicar">${ico('plus')} Novo aviso</button>`
+      : `<button class="btn btn--block btn--compacto" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`;
+  }
+}
+
+/* ---------- Camadas ---------- */
+
+let focoAnterior = null;
+
+function desenharCamadas() {
+  const caixa = $('#camadas');
+  const c = estado.camada;
+
+  document.body.classList.toggle('com-camada', !!c);
+
+  if (!c) {
+    caixa.innerHTML = '';
+    $('.layout').removeAttribute('inert');
+    if (focoAnterior && document.contains(focoAnterior)) { try { focoAnterior.focus(); } catch (e) {} }
+    focoAnterior = null;
+    return;
+  }
+
+  if (!focoAnterior) focoAnterior = document.activeElement;
+  caixa.innerHTML = desenhoDaCamada(c);
+  $('.layout').setAttribute('inert', '');
+  const alvo = caixa.querySelector('[data-foco]') || caixa.querySelector('button');
+  if (alvo) { try { alvo.focus(); } catch (e) {} }
+}
+
+function desenhoDaCamada(c) {
+  if (c.tipo === 'foto') return camadaFoto(c);
+  if (c.tipo === 'anexo') return camadaAnexo(c);
+  if (c.tipo === 'confirmar') return camadaConfirmar(c);
+  if (c.tipo === 'previsualizar') return camadaPrevisualizar();
+  if (c.tipo === 'demo') return camadaDemo();
+  return '';
+}
+
+function fotosDe(p) {
+  const lista = [];
+  if (p.hero) lista.push(p.hero);
+  (p.gallery || []).forEach((g) => lista.push(g));
+  return lista;
+}
+
+function camadaFoto(c) {
+  const p = Arquivo.aviso(c.postId);
+  if (!p) return '';
+  const fotos = fotosDe(p);
+  const i = Math.max(0, Math.min(c.i, fotos.length - 1));
+  const f = fotos[i];
+
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="lightbox" role="dialog" aria-modal="true" aria-label="Foto ${i + 1} de ${fotos.length}">
+        <div class="lightbox__topo">
+          <span class="lightbox__conta mono tnum">${i + 1} de ${fotos.length}</span>
+          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
+        </div>
+        <div class="lightbox__palco">
+          ${fotos.length > 1 ? `<button class="lightbox__seta lightbox__seta--esq" data-act="foto-passo" data-d="-1" aria-label="Foto anterior">${ico('chevron-left')}</button>` : ''}
+          <div class="lightbox__frame">${imagem(f, 'lightbox__img', f.legenda)}</div>
+          ${fotos.length > 1 ? `<button class="lightbox__seta lightbox__seta--dir" data-act="foto-passo" data-d="1" aria-label="Foto seguinte">${ico('chevron-right')}</button>` : ''}
+        </div>
+        <p class="lightbox__legenda">${esc(f.legenda || '')}</p>
+      </div>
+    </div>`;
+}
+
+function camadaAnexo(c) {
+  const p = Arquivo.aviso(c.postId);
+  if (!p) return '';
+  const l = (p.links || [])[c.i];
+  if (!l) return '';
+  const d = l.destino || {};
+
+  let corpo = '';
+  if (l.type === 'map') {
+    corpo = `
+      <div class="mapa">
+        <div class="mapa__grelha" aria-hidden="true"></div>
+        <span class="mapa__pin">${ico('map')}</span>
+      </div>
+      <p class="visor__morada">${esc(d.morada || l.meta)}</p>
+      <div class="visor__accoes">
+        <a class="btn btn--kraft" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.morada || l.meta)}"
+           target="_blank" rel="noopener">${ico('map')} Abrir no Maps</a>
+        <button class="btn btn--quiet" data-act="copiar" data-valor="${esc(d.morada || l.meta)}"
+                data-msg="Morada copiada.">${ico('copy')} Copiar morada</button>
+      </div>`;
+  } else if (l.type === 'pdf') {
+    corpo = `
+      <div class="pdf">
+        ${Array.from({ length: Math.min(d.paginas || 2, 4) }).map((_, i) => `
+          <span class="pdf__pagina"><span class="pdf__n mono">${i + 1}</span></span>`).join('')}
+      </div>
+      <p class="visor__morada">${esc(d.ficheiro || l.label)} · ${esc(d.tamanho || l.meta)}${d.paginas ? ' · ' + plural(d.paginas, 'página', 'páginas') : ''}</p>
+      <div class="visor__accoes">
+        <button class="btn btn--kraft" data-act="simular-descarga" data-valor="${esc(d.ficheiro || l.label)}">${ico('download')} Descarregar</button>
+        <button class="btn btn--quiet" data-act="copiar" data-valor="${esc(d.ficheiro || l.label)}"
+                data-msg="Nome do ficheiro copiado.">${ico('copy')} Copiar nome</button>
+      </div>`;
+  } else if (l.type === 'phone') {
+    corpo = `
+      <p class="visor__numero tnum">${esc(l.meta)}</p>
+      <div class="visor__accoes">
+        <a class="btn btn--kraft" href="tel:${esc(String(d.numero || l.meta).replace(/\s/g, ''))}">${ico('phone')} Ligar agora</a>
+        <button class="btn btn--quiet" data-act="copiar" data-valor="${esc(l.meta)}"
+                data-msg="Número copiado.">${ico('copy')} Copiar número</button>
+      </div>`;
+  } else {
+    corpo = `
+      <p class="visor__morada">${esc(d.url || l.meta)}</p>
+      <div class="visor__accoes">
+        <a class="btn btn--kraft" href="${esc(d.url || '#')}" target="_blank" rel="noopener">${ico('link')} Abrir a ligação</a>
+        <button class="btn btn--quiet" data-act="copiar" data-valor="${esc(d.url || '')}"
+                data-msg="Ligação copiada.">${ico('copy')} Copiar ligação</button>
+      </div>`;
+  }
+
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="visor" role="dialog" aria-modal="true" aria-label="${esc(l.label)}">
+        <div class="visor__topo">
+          <span class="visor__titulo">${esc(l.label)}</span>
+          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
+        </div>
+        ${corpo}
+      </div>
+    </div>`;
+}
+
+function camadaConfirmar(c) {
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="dialogo" role="alertdialog" aria-modal="true" aria-labelledby="dlg-t">
+        <p class="dialogo__titulo" id="dlg-t">${esc(c.titulo)}</p>
+        <p class="dialogo__texto">${esc(c.texto)}</p>
+        <div class="dialogo__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada" data-foco>${esc(c.cancelar || 'Cancelar')}</button>
+          <button class="btn ${c.perigo ? 'btn--danger' : 'btn--solid'}" data-act="${c.act}" data-id="${esc(c.id || '')}">
+            ${esc(c.confirmar)}
+          </button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function camadaPrevisualizar() {
+  const p = avisoDoRascunho();
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="visor visor--largo" role="dialog" aria-modal="true" aria-label="Pré-visualização">
+        <div class="visor__topo">
+          <span class="visor__titulo">Como vai ficar no quadro</span>
+          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
+        </div>
+        <div class="previsao">
+          ${fichaAviso(p)}
+        </div>
+        <div class="visor__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada">Continuar a editar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function camadaDemo() {
+  const d = Arquivo.demo();
+  return `
+    <div class="camada camada--fundo" data-act="fundo">
+      <div class="demopanel" role="dialog" aria-modal="true" aria-label="Opções da demonstração">
+        <div class="visor__topo">
+          <span class="visor__titulo">Demonstração</span>
+          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
+        </div>
+        <div class="demopanel__row">
+          <p class="eyebrow">Permissões da utilizadora</p>
+          <div class="segmented">
+            <button data-act="papel" data-role="admin" aria-pressed="${d.role === 'admin'}">Administra tudo</button>
+            <button data-act="papel" data-role="responsavel" aria-pressed="${d.role !== 'admin'}">Um só quadro</button>
+          </div>
+        </div>
+        <div class="demopanel__row">
+          <p class="eyebrow">Protótipo</p>
+          <button class="switch" role="checkbox" aria-checked="${d.stamps}" data-act="interruptor-selos">
+            <span>Mostrar o selo NOVO</span>
+            <span class="switch__box">${ico('check')}</span>
+          </button>
+          <button class="switch" role="checkbox" aria-checked="${temSessao()}" data-act="interruptor-sessao">
+            <span>Sessão iniciada</span>
+            <span class="switch__box">${ico('check')}</span>
+          </button>
+        </div>
+        <div class="demopanel__row">
+          <p class="eyebrow">Dados</p>
+          <p class="nota">Os avisos que criar ficam guardados neste navegador${Arquivo.estadoDoDisco() === 'memoria' ? ' <strong>(só nesta sessão: o armazenamento está cheio ou indisponível)</strong>' : ''}.</p>
+          <button class="btn btn--quiet btn--block btn--sm" data-act="pedir-repor">${ico('refresh')} Repor demonstração</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ---------- Rascunho ---------- */
+
+function avisoDoRascunho() {
+  const v = estado.valores;
+  const alvos = destinosResolvidos();
+  const heroi = v.imagem || null;
+  const fotos = Array.isArray(v.galeria) ? v.galeria : [];
+  const links = [];
+  if (v.local) links.push({ type: 'map', label: 'Ver o local no mapa', meta: v.local, destino: { morada: v.local } });
+  if (v.ligacao) links.push({ type: 'link', label: 'Abrir a ligação', meta: v.ligacao, destino: { url: v.ligacao } });
+  if (v.pdf) links.push({ type: 'pdf', label: 'Descarregar o ficheiro', meta: v.pdf.tamanho || '', destino: { ficheiro: v.pdf.nome, tamanho: v.pdf.tamanho, paginas: 2 } });
+  if (v.contacto) links.push({ type: 'phone', label: 'Ligar', meta: v.contacto, destino: { numero: v.contacto } });
+
+  const descricao = String(v.texto || '').trim();
+  const s = sessao();
+
+  return {
+    id: estado.editingId || 'previsao',
+    boards: alvos.length ? alvos : [(s && s.board) || 'ala'],
+    kind: v.tipo || 'Aviso',
+    date: agoraLegivel(),
+    isNew: false,
+    title: String(v.titulo || '').trim() || 'Sem título',
+    summary: descricao.split('\n')[0].slice(0, 140) || 'Sem descrição',
+    body: descricao ? descricao.split(/\n{2,}/).map((t) => t.trim()).filter(Boolean) : [],
+    when: v.data ? { day: dataLegivel(v.data), time: horaLegivel(v.data), place: v.local || '' } : null,
+    hero: heroi,
+    gallery: fotos,
+    links: links,
+    contact: v.contacto ? { name: (s && s.nome) || '', phone: v.contacto, note: '' } : null,
+    author: (s && s.nome) || '',
+    authorRole: alvos.length ? nomeQuadro(alvos[0]) : '',
+    autorId: (s && s.utilizador) || ''
+  };
+}
+
+const DIAS = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+function dataLegivel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const nome = DIAS[d.getDay()];
+  return nome.charAt(0).toUpperCase() + nome.slice(1) + ', ' + d.getDate() + ' de ' + MESES[d.getMonth()];
+}
+
+function horaLegivel(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+/* Um aviso novo abre já com as duas partes que nenhum aviso dispensa;
+   o resto acrescenta-se pela paleta. Folha limpa, mas utilizável. */
+const PARTES_DE_ORIGEM = ['titulo', 'texto'];
+
+function limparRascunho() {
+  estado.blocks = PARTES_DE_ORIGEM.slice();
+  estado.valores = {};
+  estado.editingId = null;
+  estado.mode = 'mine';
+  estado.picked = [];
+}
+
+function carregarParaEdicao(p) {
+  estado.editingId = p.id;
+  estado.valores = {};
+  estado.blocks = [];
+
+  const juntar = (chave, valor) => {
+    if (valor === undefined || valor === null || valor === '') return;
+    estado.blocks.push(chave);
+    estado.valores[chave] = valor;
+  };
+
+  juntar('titulo', p.title);
+  if (p.hero) juntar('imagem', p.hero);
+  if (p.when && p.when.day) estado.valores.data = estado.valores.data || '';
+  juntar('texto', (p.body || []).join('\n\n'));
+  if (p.when && p.when.place) juntar('local', p.when.place);
+  if ((p.gallery || []).length) juntar('galeria', p.gallery);
+  const lig = (p.links || []).find((l) => l.type === 'link');
+  if (lig) juntar('ligacao', (lig.destino && lig.destino.url) || lig.meta);
+  const pdf = (p.links || []).find((l) => l.type === 'pdf');
+  if (pdf) juntar('pdf', { nome: (pdf.destino && pdf.destino.ficheiro) || pdf.label, tamanho: (pdf.destino && pdf.destino.tamanho) || pdf.meta });
+  if (p.contact && p.contact.phone) juntar('contacto', p.contact.phone);
+
+  estado.valores.tipo = p.kind;
+  const permitidos = Arquivo.quadrosPermitidos();
+  estado.picked = (p.boards || []).filter((id) => permitidos.indexOf(id) > -1);
+  estado.mode = estado.picked.length > 1 ? 'pick' : (estado.picked.length === 1 && sessao() && estado.picked[0] === sessao().board ? 'mine' : 'pick');
+}
+
+function haConteudo() {
+  return estado.blocks.length > 0 && Object.keys(estado.valores).some((k) => {
+    const v = estado.valores[k];
+    return v && (typeof v === 'string' ? v.trim() : true);
+  });
+}
+
+/* ---------- Ficheiros ---------- */
+
+const LADO_MAXIMO = 1400;
+
+function lerImagem(ficheiro, feito) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;
+      const medidas = w + '×' + h;
+      if (w > LADO_MAXIMO) { h = Math.round(h * LADO_MAXIMO / w); w = LADO_MAXIMO; }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      let url;
+      try { url = c.toDataURL('image/jpeg', 0.72); } catch (e) { url = fr.result; }
+      feito({ dataUrl: url, nome: ficheiro.name, medidas: medidas, legenda: ficheiro.name });
+    };
+    img.onerror = () => feito(null);
+    img.src = fr.result;
+  };
+  fr.onerror = () => feito(null);
+  fr.readAsDataURL(ficheiro);
+}
+
+const emKB = (n) => (n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+
+function receberFicheiros(chave, ficheiros) {
+  const b = BLOCKS[chave];
+  const lista = Array.from(ficheiros || []);
+  if (!lista.length) return;
+
+  if (b.accept === 'application/pdf') {
+    const f = lista[0];
+    estado.valores[chave] = { nome: f.name, tamanho: emKB(f.size) };
+    desenhar();
+    aviso('«' + f.name + '» anexado.');
+    return;
+  }
+
+  const imagens = lista.filter((f) => /^image\//.test(f.type));
+  if (!imagens.length) { aviso('Escolha um ficheiro de imagem.'); return; }
+
+  let porLerN = imagens.length;
+  const prontas = [];
+  imagens.forEach((f, i) => {
+    lerImagem(f, (r) => {
+      if (r) prontas[i] = r;
+      if (--porLerN === 0) {
+        const boas = prontas.filter(Boolean);
+        if (b.campo === 'ficheiros') {
+          const antes = Array.isArray(estado.valores[chave]) ? estado.valores[chave] : [];
+          estado.valores[chave] = antes.concat(boas);
+        } else {
+          estado.valores[chave] = boas[0];
+        }
+        desenhar();
+        aviso(boas.length === 1 ? 'Imagem carregada.' : plural(boas.length, 'imagem carregada', 'imagens carregadas') + '.');
+      }
+    });
+  });
+}
+
+/* ---------- Ações ---------- */
+
+const ACCOES = {
+  ir: (el) => ir(el.dataset.hash),
+
+  voltar: (el) => voltar(el.dataset.hash),
+
+  'abrir-aviso': (el) => {
+    if (Arquivo.marcarLido(el.dataset.id)) { /* deixa de estar por ler */ }
+    ir('#/aviso/' + el.dataset.id);
+  },
+
+  'abrir-quadro': (el) => ir('#/quadro/' + el.dataset.id),
+
+  'novo-aviso': (el) => {
+    if (haConteudo() && !estado.editingId) {
+      abrirCamada({
+        tipo: 'confirmar', titulo: 'Já tem um aviso a meio',
+        texto: 'Começar um novo descarta o que escreveu.',
+        confirmar: 'Começar de novo', cancelar: 'Continuar o atual',
+        act: 'confirmar-novo', perigo: true, id: el.dataset.hash
+      });
+      return;
+    }
+    limparRascunho();
+    ir(el.dataset.hash || '#/publicar');
+  },
+
+  'confirmar-novo': (el) => {
+    const destino = el.dataset.id || '#/publicar';
+    limparRascunho();
+    Arquivo.limparRascunho();
+    fecharCamada(true);
+    ir(destino);
+  },
+
+  editar: (el) => ir('#/editar/' + el.dataset.id),
+
+  'ler-tudo': () => {
+    const n = Arquivo.marcarTudoLido();
+    desenhar();
+    aviso(n ? plural(n, 'aviso marcado como lido', 'avisos marcados como lidos') + '.' : 'Já estava tudo lido.');
+  },
+
+  filtro: (el) => { estado.filtro = el.dataset.tipo || null; desenhar(); },
+
+  ordem: () => { estado.ordem = estado.ordem === 'recentes' ? 'antigos' : 'recentes'; desenhar(); },
+
+  /* --- procura: nunca redesenhar o ecrã inteiro, para não matar o foco --- */
+  atalho: (el) => {
+    const q = el.dataset.q;
+    estado.query = estado.query.trim().toLowerCase() === q.toLowerCase() ? '' : q;
+    const campo = $('#q');
+    if (campo) { campo.value = estado.query; campo.focus(); }
+    actualizarProcura();
+  },
+
+  'limpar-procura': () => {
+    estado.query = '';
+    const campo = $('#q');
+    if (campo) { campo.value = ''; campo.focus(); }
+    actualizarProcura();
+  },
+
+  /* --- criar aviso --- */
+  'juntar-bloco': (el) => {
+    const k = el.dataset.chave;
+    if (estado.blocks.indexOf(k) < 0) estado.blocks.push(k);
+    desenhar();
+    const campo = $('#c-' + k);
+    if (campo && campo.focus) campo.focus();
+  },
+
+  'tirar-bloco': (el) => {
+    const i = Number(el.dataset.i);
+    const chave = estado.blocks[i];
+    const tinha = estado.valores[chave];
+    const guardado = tinha;
+    estado.blocks.splice(i, 1);
+    delete estado.valores[chave];
+    desenhar();
+    if (tinha) {
+      aviso('«' + BLOCKS[chave].label + '» retirada.', {
+        etiqueta: 'Anular', act: 'repor-bloco', id: chave
+      });
+      ACCOES._blocoGuardado = { chave: chave, valor: guardado, i: i };
+    }
+  },
+
+  'repor-bloco': () => {
+    const g = ACCOES._blocoGuardado;
+    if (!g) return;
+    estado.blocks.splice(Math.min(g.i, estado.blocks.length), 0, g.chave);
+    estado.valores[g.chave] = g.valor;
+    ACCOES._blocoGuardado = null;
+    limparAviso();
+    desenhar();
+  },
+
+  mover: (el) => {
+    const i = Number(el.dataset.i), d = Number(el.dataset.d);
+    const j = i + d;
+    if (j < 0 || j >= estado.blocks.length) return;
+    const t = estado.blocks[i];
+    estado.blocks[i] = estado.blocks[j];
+    estado.blocks[j] = t;
+    desenhar();
+    const botao = $(`[data-act="mover"][data-i="${j}"][data-d="${d}"]`);
+    if (botao) botao.focus();
+  },
+
+  'limpar-ficheiro': (el) => {
+    delete estado.valores[el.dataset.chave];
+    desenhar();
+  },
+
+  'tirar-foto': (el) => {
+    const chave = el.dataset.chave, i = Number(el.dataset.i);
+    const lista = estado.valores[chave] || [];
+    lista.splice(i, 1);
+    if (!lista.length) delete estado.valores[chave];
+    desenhar();
+  },
+
+  descartar: () => {
+    if (!haConteudo()) { limparRascunho(); voltar('#/a-minha-conta'); return; }
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Descartar este aviso?',
+      texto: 'O que escreveu não fica guardado.',
+      confirmar: 'Descartar', cancelar: 'Continuar a editar',
+      act: 'confirmar-descartar', perigo: true
+    });
+  },
+
+  'confirmar-descartar': () => {
+    limparRascunho();
+    Arquivo.limparRascunho();
+    fecharCamada(true);
+    substituir('#/a-minha-conta');
+    aviso('Aviso descartado.');
+  },
+
+  modo: (el) => {
+    estado.mode = el.dataset.mode;
+    if (estado.mode === 'pick' && !estado.picked.length) {
+      const meu = sessao() && sessao().board;
+      if (meu) estado.picked = [meu];
+    }
+    desenhar();
+  },
+
+  'modo-bloqueado': () => {
+    aviso(ehAdmin()
+      ? 'Não tem permissão para publicar neste quadro.'
+      : 'Só quem administra todos os quadros pode publicar fora do seu.');
+  },
+
+  marcar: (el) => {
+    const id = el.dataset.id;
+    const i = estado.picked.indexOf(id);
+    if (i > -1) estado.picked.splice(i, 1); else estado.picked.push(id);
+    desenhar();
+  },
+
+  previsualizar: () => abrirCamada({ tipo: 'previsualizar' }),
+
+  publicar: () => {
+    const alvos = destinosResolvidos();
+    if (!alvos.length) { aviso('Escolha pelo menos um quadro.'); return; }
+
+    const base = avisoDoRascunho();
+    if (estado.editingId) {
+      const p = Arquivo.atualizar(estado.editingId, {
+        boards: alvos, title: base.title, summary: base.summary, body: base.body,
+        when: base.when, hero: base.hero, gallery: base.gallery, links: base.links,
+        contact: base.contact
+      });
+      const id = p.id;
+      limparRascunho();
+      Arquivo.limparRascunho();
+      substituir('#/aviso/' + id);
+      aviso('Alterações guardadas.');
+      return;
+    }
+
+    delete base.id;
+    const criado = Arquivo.criar(base);
+    limparRascunho();
+    Arquivo.limparRascunho();
+    substituir('#/a-minha-conta');
+    aviso('Publicado em ' + alvos.map(nomeQuadro).join(', ') + '.');
+  },
+
+  /* --- eliminar --- */
+  'pedir-eliminar': (el) => {
+    const p = Arquivo.aviso(el.dataset.id);
+    if (!p) return;
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Eliminar «' + p.title + '»?',
+      texto: 'Deixa de aparecer no quadro e nas novidades.',
+      confirmar: 'Eliminar', act: 'confirmar-eliminar', id: p.id, perigo: true
+    });
+  },
+
+  'confirmar-eliminar': (el) => {
+    const noProprio = estado.ecra === 'post' && estado.postId === el.dataset.id;
+    const r = Arquivo.eliminar(el.dataset.id);
+    fecharCamada(noProprio);
+    if (!r) return;
+    estado.eliminado = r;
+    if (noProprio) substituir('#/a-minha-conta');
+    else desenhar();
+    aviso('«' + r.aviso.title + '» eliminado.', { etiqueta: 'Anular', act: 'anular-eliminar' });
+  },
+
+  'anular-eliminar': () => {
+    if (!estado.eliminado) return;
+    Arquivo.restaurar(estado.eliminado.aviso, estado.eliminado.indice);
+    const t = estado.eliminado.aviso.title;
+    estado.eliminado = null;
+    limparAviso();
+    desenhar();
+    aviso('«' + t + '» reposto.');
+  },
+
+  /* --- camadas --- */
+  foto: (el) => {
+    const p = Arquivo.aviso(el.dataset.id);
+    if (!p) return;
+    const i = Number(el.dataset.i);
+    abrirCamada({ tipo: 'foto', postId: p.id, i: i < 0 ? 0 : (p.hero ? i + 1 : i) });
+  },
+
+  'foto-passo': (el) => {
+    const c = estado.camada;
+    if (!c || c.tipo !== 'foto') return;
+    const p = Arquivo.aviso(c.postId);
+    const n = fotosDe(p).length;
+    c.i = (c.i + Number(el.dataset.d) + n) % n;
+    desenharCamadas();
+  },
+
+  anexo: (el) => abrirCamada({ tipo: 'anexo', postId: el.dataset.id, i: Number(el.dataset.i) }),
+
+  'fechar-camada': () => fecharCamada(),
+
+  fundo: (el, ev) => { if (ev.target === el) fecharCamada(); },
+
+  demo: () => abrirCamada({ tipo: 'demo' }),
+
+  /* --- partilhar e copiar --- */
+  partilhar: async (el) => {
+    const p = Arquivo.aviso(el.dataset.id);
+    if (!p) return;
+    const url = location.href.split('#')[0] + '#/aviso/' + p.id;
+    if (navigator.share) {
+      try { await navigator.share({ title: p.title, url: url }); return; } catch (e) { /* cancelou */ }
+    }
+    aviso((await copiar(url)) ? 'Ligação copiada.' : 'Não foi possível copiar a ligação.');
+  },
+
+  copiar: async (el) => {
+    const ok = await copiar(el.dataset.valor);
+    aviso(ok ? (el.dataset.msg || 'Copiado.') : 'Não foi possível copiar.');
+  },
+
+  'copiar-numero': async (el) => {
+    aviso((await copiar(el.dataset.valor)) ? 'Número copiado.' : 'Não foi possível copiar.');
+  },
+
+  'simular-descarga': (el) => {
+    aviso('Simulação: «' + el.dataset.valor + '» seria guardado em Transferências.');
+  },
+
+  /* --- sessão --- */
+  'conta-exemplo': () => {
+    const u = $('#campo-utilizador'), pw = $('#campo-palavra');
+    if (u) u.value = CONTA_EXEMPLO.utilizador;
+    if (pw) pw.value = 'demonstracao';
+    const erro = $('#erro-entrar');
+    if (erro) erro.hidden = true;
+    if (u) u.focus();
+  },
+
+  'ver-palavra': (el) => {
+    const campo = $('#campo-palavra');
+    if (!campo) return;
+    const mostrar = campo.type === 'password';
+    campo.type = mostrar ? 'text' : 'password';
+    el.setAttribute('aria-label', mostrar ? 'Ocultar a palavra-passe' : 'Mostrar a palavra-passe');
+    el.classList.toggle('palavra__olho--on', mostrar);
+    campo.focus();
+  },
+
+  sair: () => {
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Sair da conta?',
+      texto: 'Pode continuar a ler os avisos sem sessão iniciada.',
+      confirmar: 'Sair', act: 'confirmar-sair'
+    });
+  },
+
+  'confirmar-sair': () => {
+    Arquivo.sair();
+    limparRascunho();
+    fecharCamada(true);
+    substituir('#/novidades');
+    aviso('Sessão terminada. Pode continuar a ler os avisos.');
+  },
+
+  /* --- painel da demonstração --- */
+  papel: (el) => {
+    Arquivo.definirDemo({ role: el.dataset.role });
+    // Baixar a permissão não pode deixar um destino inválido escolhido.
+    const permitidos = Arquivo.quadrosPermitidos();
+    if (estado.mode === 'all' && !ehAdmin()) estado.mode = 'mine';
+    estado.picked = estado.picked.filter((id) => permitidos.indexOf(id) > -1);
+    desenharCamadas();
+    desenhar();
+  },
+
+  'interruptor-selos': () => {
+    Arquivo.definirDemo({ stamps: !Arquivo.demo().stamps });
+    desenharCamadas();
+    desenhar();
+  },
+
+  'interruptor-sessao': () => {
+    if (temSessao()) Arquivo.sair(); else Arquivo.entrar(CONTA_EXEMPLO.utilizador);
+    desenharCamadas();
+    encaminhar();
+  },
+
+  'pedir-repor': () => {
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Repor a demonstração?',
+      texto: 'Os avisos que criou são apagados e tudo volta ao estado inicial.',
+      confirmar: 'Repor', act: 'confirmar-repor', perigo: true
+    });
+  },
+
+  'confirmar-repor': () => {
+    Arquivo.repor();
+    limparRascunho();
+    estado.filtro = null;
+    estado.query = '';
+    fecharCamada(true);
+    substituir('#/novidades');
+    aviso('Demonstração reposta.');
+  },
+
+  'retomar-rascunho': () => {
+    const r = Arquivo.rascunho();
+    if (!r) return;
+    estado.blocks = r.blocks || [];
+    estado.valores = r.valores || {};
+    estado.editingId = r.editingId || null;
+    estado.mode = r.mode || 'mine';
+    estado.picked = r.picked || [];
+    ir('#/publicar');
+  },
+
+  'deitar-rascunho': () => { Arquivo.limparRascunho(); desenhar(); aviso('Rascunho deitado fora.'); },
+
+  'fechar-aviso': () => limparAviso()
+};
+
+function actualizarProcura() {
+  const lista = $('#results');
+  if (lista) lista.innerHTML = resultados();
+  const conta = $('#contagem');
+  if (conta) conta.textContent = textoContagem();
+  const limpar = $('[data-act="limpar-procura"].procura__limpar');
+  if (limpar) limpar.hidden = !estado.query;
+  const q = estado.query.trim().toLowerCase();
+  $$('[data-act="atalho"]').forEach((c) =>
+    c.setAttribute('aria-pressed', String(c.dataset.q.toLowerCase() === q)));
+}
+
+/* Guarda o rascunho no Arquivo quando se sai do formulário com conteúdo. */
+function talvezGuardarRascunho() {
+  if (estado.ecra !== 'compose' && estado.ecra !== 'targets') return;
+  if (estado.editingId || !haConteudo()) return;
+  Arquivo.guardarRascunho({
+    blocks: estado.blocks, valores: estado.valores,
+    editingId: estado.editingId, mode: estado.mode, picked: estado.picked
+  });
+}
+
+/* ---------- Escutas ---------- */
+
+document.addEventListener('click', (ev) => {
+  const el = ev.target.closest('[data-act]');
+  if (!el) return;
+  if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') {
+    if (el.dataset.act !== 'modo-bloqueado') return;
+  }
+  const fn = ACCOES[el.dataset.act];
+  if (!fn) return;
+  if (el.tagName === 'A' && !el.getAttribute('target')) ev.preventDefault();
+  fn(el, ev);
+});
+
+/* Campos do formulário: guardar sem redesenhar, para o teclado não fechar. */
+document.addEventListener('input', (ev) => {
+  const alvo = ev.target;
+
+  if (alvo.id === 'q') {
+    estado.query = alvo.value;
+    actualizarProcura();
+    return;
+  }
+
+  const chave = alvo.dataset && alvo.dataset.campo;
+  if (!chave) return;
+  estado.valores[chave] = alvo.value;
+
+  if (chave === 'titulo') {
+    const avancar = $('.compose__avancar .btn');
+    const nota = $('.compose__avancar .nota');
+    const pode = estado.blocks.length > 0 && !!alvo.value.trim();
+    if (avancar) avancar.disabled = !pode;
+    if (nota) nota.hidden = pode;
+  }
+});
+
+document.addEventListener('change', (ev) => {
+  const chave = ev.target.dataset && ev.target.dataset.ficheiro;
+  if (!chave) return;
+  receberFicheiros(chave, ev.target.files);
+});
+
+/* Largar ficheiros em cima da zona tracejada. */
+document.addEventListener('dragover', (ev) => {
+  if (ev.target.closest('[data-largar]')) { ev.preventDefault(); ev.target.closest('[data-largar]').classList.add('drop--sobre'); }
+});
+document.addEventListener('dragleave', (ev) => {
+  const z = ev.target.closest('[data-largar]');
+  if (z) z.classList.remove('drop--sobre');
+});
+document.addEventListener('drop', (ev) => {
+  const z = ev.target.closest('[data-largar]');
+  if (!z) return;
+  ev.preventDefault();
+  z.classList.remove('drop--sobre');
+  receberFicheiros(z.dataset.largar, ev.dataTransfer.files);
+});
+
+document.addEventListener('submit', (ev) => {
+  if (ev.target.id === 'form-entrar') {
+    ev.preventDefault();
+    const u = $('#campo-utilizador'), pw = $('#campo-palavra'), erro = $('#erro-entrar');
+    const semU = !u.value.trim(), semP = !pw.value.trim();
+    u.setAttribute('aria-invalid', String(semU));
+    pw.setAttribute('aria-invalid', String(semP));
+    if (semU || semP) {
+      erro.textContent = semU
+        ? 'Escreva o seu utilizador para entrar.'
+        : 'Escreva a palavra-passe para entrar.';
+      erro.hidden = false;
+      (semU ? u : pw).focus();
+      return;
+    }
+    erro.hidden = true;
+    const destino = estado.destinoAposEntrar || '#/a-minha-conta';
+    Arquivo.entrar(u.value);
+    substituir(destino);
+    aviso('Sessão iniciada. Já pode publicar.');
+    return;
+  }
+
+  if (ev.target.classList.contains('procura')) {
+    ev.preventDefault();
+    const campo = $('#q');
+    if (campo) campo.blur();
+  }
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') {
+    if (estado.camada) { fecharCamada(); return; }
+    if (document.activeElement && document.activeElement.id === 'q' && estado.query) {
+      ACCOES['limpar-procura']();
+      return;
+    }
+    const caixa = $('#toast');
+    if (caixa && !caixa.hidden) limparAviso();
+    return;
+  }
+
+  if (estado.camada && estado.camada.tipo === 'foto') {
+    if (ev.key === 'ArrowLeft')  { ACCOES['foto-passo']({ dataset: { d: '-1' } }); ev.preventDefault(); }
+    if (ev.key === 'ArrowRight') { ACCOES['foto-passo']({ dataset: { d: '1' } }); ev.preventDefault(); }
+    return;
+  }
+
+  // Setas nos separadores de quadro
+  const sep = ev.target.closest && ev.target.closest('.boardtab');
+  if (sep && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) {
+    const todos = $$('.boardtab');
+    const i = todos.indexOf(sep);
+    const j = (i + (ev.key === 'ArrowRight' ? 1 : -1) + todos.length) % todos.length;
+    todos[j].focus();
+    ev.preventDefault();
+  }
+});
+
+window.addEventListener('beforeunload', talvezGuardarRascunho);
+window.addEventListener('pagehide', talvezGuardarRascunho);
+
+/* ---------- Arranque ---------- */
+
+function montarEstrutura() {
+  const itens = (cls, curto) => NAV.map((n) => `
+    <button class="${cls}" data-nav="${n.id}" data-act="ir" data-hash="${n.hash}">
+      ${ico(n.ico)}<span>${curto && n.curto ? n.curto : n.etiqueta}</span>
+    </button>`).join('');
+
+  $('#tabbar').innerHTML      = itens('tabbar__item', true);
+  $('#toprail-nav').innerHTML = itens('toprail__item');
+  $('#rail-nav').innerHTML    = itens('rail__item');
+
+  $('#rail-boards').innerHTML = BOARDS.map((b) => `
+    <button class="rail__board" data-railboard="${b.id}" data-act="abrir-quadro" data-id="${b.id}">
+      <span class="dot"></span>
+      <span>${esc(b.short)}</span>
+      <span class="spacer"></span>
+      <span class="n tnum"></span>
+    </button>`).join('');
+}
+
+window.addEventListener('hashchange', () => {
+  // Só chega aqui se alguém mexer no endereço à mão: o resto passa por pushState.
+  encaminhar();
+});
+
+montarEstrutura();
+if (!location.hash) history.replaceState({ i: 0, y: 0 }, '', '#/novidades');
+encaminhar();

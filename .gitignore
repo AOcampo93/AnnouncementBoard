@@ -1,0 +1,6 @@
+# Generated single-file bundle (build with: node build-preview.js)
+preview.html
+
+# OS noise
+.DS_Store
+Thumbs.db
