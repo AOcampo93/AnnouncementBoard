@@ -7,9 +7,11 @@ to one or more boards.
 The interface is in **European Portuguese**. There is no framework, no bundler and no
 runtime dependency: three stylesheets' worth of CSS and five plain scripts.
 
-**[See it running (standalone demo) →](https://aocampo93.github.io/AnnouncementBoard/)**
-That link serves the `demo` branch, which persists to `localStorage` so it works with no
-server behind it. The `main` branch is the real front end and expects an API.
+**[See it running →](https://aocampo93.github.io/AnnouncementBoard/)**
+The published site runs the `main` branch against the live API. The `demo` branch is kept
+as a standalone version that persists to `localStorage` and needs no server at all.
+
+The API it talks to lives in [AnnouncementBoard-api](https://github.com/AOcampo93/AnnouncementBoard-api).
 
 ---
 
@@ -45,11 +47,12 @@ The API base URL comes from a meta tag in `index.html`, so it can change per env
 without touching JavaScript:
 
 ```html
-<meta name="api-base" content="/api">
+<meta name="api-base" content="https://api.arturoocampo.com/leiria">
 ```
 
 Leave it as `/api` when the API is served from the same host as the front end. Point it at
-a full URL when it is not — in that case the API must send the usual CORS headers.
+a full URL when it is not — in that case the API must send the usual CORS headers, and it
+must be served over HTTPS, because a browser will not let an HTTPS page call an HTTP API.
 
 Everything else lives in `assets/js/config.js`: request timeout, image downscaling limits,
 and where the session token is kept.
