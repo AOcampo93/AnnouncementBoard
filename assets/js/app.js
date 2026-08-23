@@ -1048,7 +1048,22 @@ function desenhar() {
   desenharCamadas();
 }
 
+function listaDeQuadros() {
+  return BOARDS.map((b) => `
+    <button class="rail__board" data-railboard="${b.id}" data-act="abrir-quadro" data-id="${b.id}">
+      <span class="dot"></span>
+      <span>${esc(b.short)}</span>
+      <span class="spacer"></span>
+      <span class="n tnum"></span>
+    </button>`).join('');
+}
+
 function desenharNav() {
+  // Os quadros chegam da API depois do arranque: reconstrói-se a lista
+  // quando o que está desenhado já não corresponde ao que há.
+  const caixa = $('#rail-boards');
+  if (caixa && caixa.children.length !== BOARDS.length) caixa.innerHTML = listaDeQuadros();
+
   $$('[data-nav]').forEach((el) => {
     const n = NAV.find((x) => x.id === el.dataset.nav);
     el.setAttribute('aria-current', el.dataset.nav === estado.seccao ? 'page' : 'false');
@@ -1945,13 +1960,7 @@ function montarEstrutura() {
   $('#toprail-nav').innerHTML = itens('toprail__item');
   $('#rail-nav').innerHTML    = itens('rail__item');
 
-  $('#rail-boards').innerHTML = BOARDS.map((b) => `
-    <button class="rail__board" data-railboard="${b.id}" data-act="abrir-quadro" data-id="${b.id}">
-      <span class="dot"></span>
-      <span>${esc(b.short)}</span>
-      <span class="spacer"></span>
-      <span class="n tnum"></span>
-    </button>`).join('');
+  $('#rail-boards').innerHTML = listaDeQuadros();
 }
 
 window.addEventListener('hashchange', () => {
