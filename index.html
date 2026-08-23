@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="description" content="Quadro de avisos da ala: novidades, quadros por organização e publicação de avisos.">
 <meta name="theme-color" content="#e3d6ba">
+
+<!-- Base da API. Muda-se aqui ao mudar de ambiente; se a API viver no mesmo
+     domínio que o frontend, basta deixar /api. -->
+<meta name="api-base" content="/api">
 <title>Quadro de Avisos</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -44,6 +48,7 @@
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></symbol>
     <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M4 17l3 3 3-3"/><path d="M17 20V4M14 7l3-3 3 3"/></symbol>
+    <symbol id="i-cloud-off" viewBox="0 0 24 24"><path d="M7.5 18.5h9.8a3.7 3.7 0 0 0 .9-7.3 5.6 5.6 0 0 0-8.2-4"/><path d="M6.6 9.4a4.6 4.6 0 0 0 .9 9.1"/><path d="m3.5 3.5 17 17"/></symbol>
   </defs>
 </svg>
 
@@ -90,18 +95,15 @@
 <!-- Barra de separadores: só em telemóvel (até 767px) -->
 <nav class="tabbar" id="tabbar" aria-label="Secções"></nav>
 
-<!-- Comando da demonstração -->
-<button class="demotoggle" data-act="demo" aria-label="Opções da demonstração">
-  <svg class="ico" aria-hidden="true"><use href="#i-sliders"></use></svg>
-</button>
-
 <!-- Mensagem: nó permanente, para sobreviver à mudança de ecrã -->
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <!-- Sobreposições -->
 <div id="camadas"></div>
 
+<script src="assets/js/config.js"></script>
 <script src="assets/js/data.js"></script>
+<script src="assets/js/api.js"></script>
 <script src="assets/js/store.js"></script>
 <script src="assets/js/app.js"></script>
 </body>

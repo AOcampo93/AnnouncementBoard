@@ -1,194 +1,308 @@
 /* ============================================================
    Quadro de Avisos — arquivo
-   Tudo o que sobrevive a um F5 passa por aqui. Sem backend: o
-   navegador é o servidor. Uma só chave versionada em localStorage.
+   Cache em memória por cima da API. As LEITURAS são síncronas, para
+   as funções de ecrã poderem continuar a construir HTML numa linha
+   só; as ESCRITAS são assíncronas e otimistas: mexem já na cache,
+   pedem ao servidor, e desfazem se o servidor recusar.
    ============================================================ */
 
 const Arquivo = (function () {
 
-  const CHAVE = 'quadro-avisos.v1';
+  const cache = {
+    avisos: [],
+    quadros: [],
+    sessao: null
+  };
 
-  let d = null;          // dados em memória
-  let semDisco = false;  // localStorage indisponível ou cheio
+  const rede = { aCarregar: false, prontos: false, erro: null };
+  const ouvintes = [];
 
-  /* ---------- disco ---------- */
+  const notificar = () => ouvintes.forEach((fn) => { try { fn(); } catch (e) { /* ouvinte seu problema */ } });
 
-  function inicial() {
-    return {
-      avisos: SEED_POSTS.map((p) => JSON.parse(JSON.stringify(p))),
-      lidos: [],                                   // ids já abertos
-      // Arranca com sessão iniciada, como no protótipo original: assim vê-se
-      // a app inteira à primeira. O painel da demonstração permite fechá-la.
-      sessao: { utilizador: CONTA_EXEMPLO.utilizador, nome: CONTA_EXEMPLO.nome, board: CONTA_EXEMPLO.board },
-      rascunho: null,                              // { blocks, valores, editingId, mode, picked }
-      demo: { role: 'admin', stamps: true }
-    };
-  }
+  /* ---------- datas ---------- */
 
-  function carregar() {
-    try {
-      const cru = localStorage.getItem(CHAVE);
-      if (!cru) { d = inicial(); gravar(); return; }
-      const lido = JSON.parse(cru);
-      // Fundir com o inicial: uma versão gravada antes de um campo novo
-      // existir não pode deixar a app sem esse campo.
-      d = Object.assign(inicial(), lido);
-      if (!Array.isArray(d.avisos) || !d.avisos.length) d.avisos = inicial().avisos;
-      if (!Array.isArray(d.lidos)) d.lidos = [];
-      if (!d.demo) d.demo = { role: 'admin', stamps: true };
-    } catch (err) {
-      semDisco = true;
-      d = inicial();
+  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+  /* O servidor manda o instante; a etiqueta legível calcula-se aqui, no
+     fuso e no relógio de quem está a ler. */
+  function dataRelativa(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const agora = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+
+    const dia = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diasAtras = Math.round((dia(agora) - dia(d)) / 86400000);
+
+    if (diasAtras === 0) return 'Hoje · ' + hh + ':' + mm;
+    if (diasAtras === 1) return 'Ontem · ' + hh + ':' + mm;
+    if (d.getFullYear() !== agora.getFullYear()) {
+      return d.getDate() + ' ' + MESES[d.getMonth()] + ' ' + d.getFullYear();
     }
+    return d.getDate() + ' ' + MESES[d.getMonth()];
   }
 
-  function gravar() {
-    if (semDisco) return true;
-    try {
-      localStorage.setItem(CHAVE, JSON.stringify(d));
-      return true;
-    } catch (err) {
-      // Quota cheia: quase sempre por causa de imagens carregadas.
-      semDisco = true;
-      return false;
-    }
-  }
-
-  function repor() {
-    d = inicial();
-    semDisco = false;
-    try { localStorage.removeItem(CHAVE); } catch (err) { /* sem disco */ }
-    gravar();
-  }
-
-  /* ---------- leitura ---------- */
-
-  const clonar = (o) => JSON.parse(JSON.stringify(o));
-
-  /* Mais recente primeiro. Um aviso acabado de criar fica sempre no topo. */
-  const porData = (a, b) => (b.ts || 0) - (a.ts || 0);
-
-  function avisos() { return d.avisos.slice().sort(porData); }
-
-  function aviso(id) { return d.avisos.find((p) => p.id === id) || null; }
-
-  function doQuadro(id) {
-    return avisos().filter((p) => (p.boards || []).indexOf(id) > -1);
-  }
-
-  function porLer(p) { return d.lidos.indexOf(p.id) < 0 && p.isNew; }
-
-  function naoLidos(lista) { return (lista || avisos()).filter(porLer).length; }
-
-  /* Avisos de que a sessão é autora. Quem administra vê também, num bloco
-     à parte, os que administra sem ter escrito. */
-  function meus() {
-    const s = d.sessao;
-    if (!s) return { proprios: [], administrados: [] };
-    const proprios = avisos().filter((p) => p.autorId === s.utilizador);
-    const administrados = d.demo.role === 'admin'
-      ? avisos().filter((p) => p.autorId !== s.utilizador)
-      : avisos().filter((p) => p.autorId !== s.utilizador && (p.boards || []).indexOf(s.board) > -1);
-    return { proprios: proprios, administrados: administrados };
-  }
-
-  /* Quadros em que a sessão tem autorização para publicar. */
-  function quadrosPermitidos() {
-    if (d.demo.role === 'admin') return BOARDS.map((b) => b.id);
-    return d.sessao ? [d.sessao.board] : [];
-  }
-
-  /* ---------- escrita ---------- */
-
-  function novoId() {
-    return 'a' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
-  }
-
-  function criar(aviso) {
-    const p = Object.assign({ id: novoId(), ts: Date.now(), isNew: false }, aviso);
-    d.avisos.unshift(p);
-    gravar();
+  /* Acrescenta o que a interface espera e o servidor não precisa de mandar. */
+  function normalizar(p) {
+    if (!p) return p;
+    p.boards = p.boards || [];
+    p.gallery = p.gallery || [];
+    p.links = p.links || [];
+    p.body = p.body || [];
+    p.date = dataRelativa(p.ts);
     return p;
   }
 
-  function atualizar(id, patch) {
-    const i = d.avisos.findIndex((p) => p.id === id);
+  const porData = (a, b) => (b.ts || 0) - (a.ts || 0);
+
+  /* ---------- leituras (síncronas, sobre a cache) ---------- */
+
+  function avisos() { return cache.avisos.slice().sort(porData); }
+  function aviso(id) { return cache.avisos.find((p) => p.id === id) || null; }
+  function doQuadro(id) { return avisos().filter((p) => p.boards.indexOf(id) > -1); }
+
+  /* Quem já leu o quê é do servidor: vem marcado em cada aviso. */
+  function porLer(p) { return !!p && p.porLer === true; }
+  function naoLidos(lista) { return (lista || avisos()).filter(porLer).length; }
+
+  function sessao() { return cache.sessao; }
+  function ehAdmin() { return !!cache.sessao && cache.sessao.papel === 'admin'; }
+
+  function quadrosPermitidos() {
+    const s = cache.sessao;
+    if (!s) return [];
+    if (Array.isArray(s.quadrosPermitidos)) return s.quadrosPermitidos;
+    return s.papel === 'admin' ? cache.quadros.map((b) => b.id) : [s.board];
+  }
+
+  /* O servidor decide quem pode editar e apagar o quê; o cliente só obedece. */
+  function podeEditar(p) { return !!p && p.podeEditar === true; }
+  function podeEliminar(p) { return !!p && p.podeEliminar === true; }
+
+  function meus() {
+    const s = cache.sessao;
+    if (!s) return { proprios: [], administrados: [] };
+    const todos = avisos();
+    return {
+      proprios: todos.filter((p) => p.autorId === s.utilizador),
+      administrados: todos.filter((p) => p.autorId !== s.utilizador && podeEditar(p))
+    };
+  }
+
+  function estadoRede() { return rede; }
+
+  /* ---------- arranque e recarga ---------- */
+
+  async function arrancar() {
+    rede.aCarregar = true;
+    rede.erro = null;
+    notificar();
+
+    try {
+      if (Api.temToken()) {
+        try {
+          cache.sessao = await Api.sessaoAtual();
+        } catch (err) {
+          // Token velho ou revogado: segue-se em modo de leitura.
+          if (err.codigo === 'autenticacao') { Api.definirToken(null); cache.sessao = null; }
+          else throw err;
+        }
+      }
+
+      const [quadros, resposta] = await Promise.all([Api.quadros(), Api.avisos()]);
+
+      // O array BOARDS é partilhado com a camada de vista: enche-se no
+      // sítio, para as referências existentes continuarem válidas.
+      cache.quadros = quadros || [];
+      BOARDS.length = 0;
+      cache.quadros.forEach((b) => BOARDS.push(b));
+
+      cache.avisos = ((resposta && resposta.avisos) || []).map(normalizar);
+      rede.prontos = true;
+      rede.erro = null;
+    } catch (err) {
+      rede.erro = err;
+      rede.prontos = false;
+    } finally {
+      rede.aCarregar = false;
+      notificar();
+    }
+  }
+
+  async function recarregar() {
+    try {
+      const resposta = await Api.avisos();
+      cache.avisos = ((resposta && resposta.avisos) || []).map(normalizar);
+      rede.erro = null;
+      notificar();
+    } catch (err) {
+      rede.erro = err;
+      notificar();
+      throw err;
+    }
+  }
+
+  /* ---------- escritas otimistas ---------- */
+
+  function idProvisorio() { return 'tmp-' + Date.now().toString(36); }
+
+  async function criar(dados) {
+    const provisorio = normalizar(Object.assign({}, dados, {
+      id: idProvisorio(), ts: Date.now(), porLer: false,
+      podeEditar: true, podeEliminar: true, aEnviar: true
+    }));
+    cache.avisos.unshift(provisorio);
+    notificar();
+
+    try {
+      const real = normalizar(await Api.criarAviso(dados));
+      const i = cache.avisos.findIndex((p) => p.id === provisorio.id);
+      if (i > -1) cache.avisos[i] = real; else cache.avisos.unshift(real);
+      notificar();
+      return real;
+    } catch (err) {
+      cache.avisos = cache.avisos.filter((p) => p.id !== provisorio.id);
+      notificar();
+      throw err;
+    }
+  }
+
+  async function atualizar(id, patch) {
+    const i = cache.avisos.findIndex((p) => p.id === id);
+    if (i < 0) throw new Api.ErroApi('nao-encontrado', 'Este aviso já não existe.');
+    const antes = cache.avisos[i];
+    cache.avisos[i] = normalizar(Object.assign({}, antes, patch, { aEnviar: true }));
+    notificar();
+
+    try {
+      const real = normalizar(await Api.editarAviso(id, patch));
+      const j = cache.avisos.findIndex((p) => p.id === id);
+      if (j > -1) cache.avisos[j] = real;
+      notificar();
+      return real;
+    } catch (err) {
+      const j = cache.avisos.findIndex((p) => p.id === id);
+      if (j > -1) cache.avisos[j] = antes;
+      notificar();
+      throw err;
+    }
+  }
+
+  async function eliminar(id) {
+    const i = cache.avisos.findIndex((p) => p.id === id);
     if (i < 0) return null;
-    d.avisos[i] = Object.assign({}, d.avisos[i], patch);
-    gravar();
-    return d.avisos[i];
+    const removido = cache.avisos[i];
+    cache.avisos.splice(i, 1);
+    notificar();
+
+    try {
+      await Api.eliminarAviso(id);
+      return { aviso: removido, indice: i };
+    } catch (err) {
+      cache.avisos.splice(Math.min(i, cache.avisos.length), 0, removido);
+      notificar();
+      throw err;
+    }
   }
 
-  /* Devolve o suficiente para anular: o objeto e a posição que ocupava. */
-  function eliminar(id) {
-    const i = d.avisos.findIndex((p) => p.id === id);
-    if (i < 0) return null;
-    const removido = d.avisos.splice(i, 1)[0];
-    gravar();
-    return { aviso: removido, indice: i };
+  /* Anular. Prefere-se o endpoint de reposição, para o aviso ficar com o
+     mesmo id e as mesmas ligações; se o servidor apagar mesmo, cria de novo. */
+  async function restaurar(avisoRemovido, indice) {
+    cache.avisos.splice(Math.min(indice, cache.avisos.length), 0, avisoRemovido);
+    notificar();
+    try {
+      const real = normalizar(await Api.restaurarAviso(avisoRemovido.id));
+      const j = cache.avisos.findIndex((p) => p.id === avisoRemovido.id);
+      if (j > -1) cache.avisos[j] = real;
+      notificar();
+      return real;
+    } catch (err) {
+      if (err.codigo === 'nao-encontrado') {
+        cache.avisos = cache.avisos.filter((p) => p.id !== avisoRemovido.id);
+        notificar();
+        return criar(paraEnvio(avisoRemovido));
+      }
+      cache.avisos = cache.avisos.filter((p) => p.id !== avisoRemovido.id);
+      notificar();
+      throw err;
+    }
   }
 
-  function restaurar(aviso, indice) {
-    d.avisos.splice(Math.min(indice, d.avisos.length), 0, aviso);
-    gravar();
+  /* Tira os campos que só existem do lado do cliente. */
+  function paraEnvio(p) {
+    const c = Object.assign({}, p);
+    ['id', 'ts', 'date', 'porLer', 'podeEditar', 'podeEliminar', 'aEnviar', 'autorId', 'author', 'authorRole'].forEach((k) => delete c[k]);
+    return c;
   }
 
-  function marcarLido(id) {
-    if (d.lidos.indexOf(id) > -1) return false;
-    d.lidos.push(id);
-    gravar();
+  /* Marcar como lido não vale um aviso de erro: falha em silêncio. */
+  async function marcarLido(id) {
+    const p = aviso(id);
+    if (!p || !p.porLer) return false;
+    p.porLer = false;
+    notificar();
+    try { await Api.marcarLido(id); } catch (err) { p.porLer = true; notificar(); }
     return true;
   }
 
-  function marcarTudoLido() {
-    const antes = d.lidos.length;
-    d.avisos.forEach((p) => { if (d.lidos.indexOf(p.id) < 0) d.lidos.push(p.id); });
-    gravar();
-    return d.lidos.length - antes;
+  async function marcarTudoLido() {
+    const antes = cache.avisos.filter((p) => p.porLer);
+    if (!antes.length) return 0;
+    antes.forEach((p) => { p.porLer = false; });
+    notificar();
+    try {
+      await Api.marcarTudoLido();
+      return antes.length;
+    } catch (err) {
+      antes.forEach((p) => { p.porLer = true; });
+      notificar();
+      throw err;
+    }
   }
 
   /* ---------- sessão ---------- */
 
-  function entrar(utilizador) {
-    const limpo = String(utilizador || '').trim();
-    const ehExemplo = limpo.toLowerCase() === CONTA_EXEMPLO.utilizador;
-    d.sessao = {
-      utilizador: limpo,
-      nome: ehExemplo ? CONTA_EXEMPLO.nome : limpo,
-      board: CONTA_EXEMPLO.board
-    };
-    gravar();
-    return d.sessao;
+  async function entrar(utilizador, palavra) {
+    const dados = await Api.entrar(utilizador, palavra);
+    if (dados && dados.token) Api.definirToken(dados.token);
+    cache.sessao = dados;
+    // As permissões mudam o que se vê: recarrega-se a lista.
+    try { await recarregar(); } catch (err) { /* a sessão abriu à mesma */ }
+    notificar();
+    return dados;
   }
 
-  function sair() { d.sessao = null; gravar(); }
+  async function sair() {
+    try { await Api.sair(); } catch (err) { /* sair é sempre local */ }
+    Api.definirToken(null);
+    cache.sessao = null;
+    try { await recarregar(); } catch (err) { /* fica o que estava */ }
+    notificar();
+  }
 
-  function sessao() { return d.sessao; }
-
-  /* ---------- rascunho ---------- */
-
-  function rascunho() { return d.rascunho; }
-  function guardarRascunho(r) { d.rascunho = r; gravar(); }
-  function limparRascunho() { d.rascunho = null; gravar(); }
-
-  /* ---------- opções da demonstração ---------- */
-
-  function demo() { return d.demo; }
-  function definirDemo(patch) { Object.assign(d.demo, patch); gravar(); }
-
-  function estadoDoDisco() { return semDisco ? 'memoria' : 'disco'; }
-
-  carregar();
+  /* Chamado pelo cliente HTTP quando o servidor responde 401. */
+  function sessaoPerdida() {
+    cache.sessao = null;
+    notificar();
+  }
 
   return {
+    aoMudar: (fn) => ouvintes.push(fn),
+    arrancar: arrancar, recarregar: recarregar, estadoRede: estadoRede,
+
     avisos: avisos, aviso: aviso, doQuadro: doQuadro,
     porLer: porLer, naoLidos: naoLidos, meus: meus,
+    sessao: sessao, ehAdmin: ehAdmin,
     quadrosPermitidos: quadrosPermitidos,
+    podeEditar: podeEditar, podeEliminar: podeEliminar,
+
     criar: criar, atualizar: atualizar, eliminar: eliminar, restaurar: restaurar,
     marcarLido: marcarLido, marcarTudoLido: marcarTudoLido,
-    entrar: entrar, sair: sair, sessao: sessao,
-    rascunho: rascunho, guardarRascunho: guardarRascunho, limparRascunho: limparRascunho,
-    demo: demo, definirDemo: definirDemo,
-    repor: repor, estadoDoDisco: estadoDoDisco, novoId: novoId
+    paraEnvio: paraEnvio,
+
+    entrar: entrar, sair: sair, sessaoPerdida: sessaoPerdida,
+    dataRelativa: dataRelativa
   };
 })();

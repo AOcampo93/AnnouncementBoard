@@ -1,6 +1,9 @@
 # Generated single-file bundle (build with: node build-preview.js)
 preview.html
 
+# Files uploaded to the development server
+tools/uploads/
+
 # OS noise
 .DS_Store
 Thumbs.db

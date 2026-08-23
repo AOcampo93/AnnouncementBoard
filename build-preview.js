@@ -15,8 +15,8 @@ html = html.replace(
   () => '<style>\n' + read('assets/css/app.css') + '\n</style>'
 );
 html = html.replace(
-  '<script src="assets/js/data.js"></script>\n<script src="assets/js/store.js"></script>\n<script src="assets/js/app.js"></script>',
-  () => '<script>\n' + read('assets/js/data.js') + '\n</script>\n<script>\n' + read('assets/js/store.js') + '\n</script>\n<script>\n' + read('assets/js/app.js') + '\n</script>'
+  ['config','data','api','store','app'].map(n => `<script src="assets/js/${n}.js"></script>`).join('\n'),
+  () => ['config','data','api','store','app'].map(n => '<script>\n' + read(`assets/js/${n}.js`) + '\n</script>').join('\n')
 );
 
 fs.writeFileSync(out, html);

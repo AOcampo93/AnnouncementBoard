@@ -20,7 +20,8 @@ const estado = {
   mode: 'mine',
   picked: [],
   camada: null,          // sobreposição aberta
-  eliminado: null        // último aviso eliminado, para anular
+  eliminado: null,       // último aviso eliminado, para anular
+  aEnviar: false         // há um pedido de escrita em voo
 };
 
 /* ---------- Utilitários ---------- */
@@ -41,11 +42,10 @@ const nomeQuadro = (id) => (quadro(id) || {}).name || '';
 
 const sessao = () => Arquivo.sessao();
 const temSessao = () => !!Arquivo.sessao();
-const ehAdmin = () => Arquivo.demo().role === 'admin';
-const selos = () => Arquivo.demo().stamps;
+const ehAdmin = () => Arquivo.ehAdmin();
 
-/* Um aviso está por ler se o Arquivo o diz e o interruptor global está ligado. */
-const porLer = (p) => Arquivo.porLer(p) && selos();
+/* Quem já leu o quê é do servidor: vem marcado em cada aviso. */
+const porLer = (p) => Arquivo.porLer(p);
 
 /* Etiqueta dos quadros de um aviso: um nome, ou o primeiro mais a contagem. */
 function etiquetaQuadros(p) {
@@ -65,8 +65,9 @@ function agoraLegivel() {
 /* Uma imagem carregada pelo utilizador desenha-se a sério; a da semente
    continua a ser o marcador tramado do desenho original. */
 function imagem(obj, classe, alt) {
-  if (obj && obj.dataUrl) {
-    return `<img class="${classe} img" src="${obj.dataUrl}" alt="${esc(alt || obj.legenda || '')}">`;
+  const fonte = obj && (obj.url || obj.dataUrl);
+  if (fonte) {
+    return `<img class="${classe} img" src="${esc(fonte)}" alt="${esc(alt || obj.legenda || '')}" loading="lazy">`;
   }
   const legenda = obj ? (obj.legenda || '') + (obj.medidas ? ' · ' + obj.medidas : '') : '';
   return `<span class="ph ${classe}">${esc(legenda)}</span>`;
@@ -501,8 +502,8 @@ function ecraAviso() {
   const p = Arquivo.aviso(estado.postId);
   if (!p) return ecraPerdido('aviso');
 
-  const meu = temSessao() && p.autorId === sessao().utilizador;
-  const podeGerir = meu || (ehAdmin() && temSessao());
+  const podeEditar = Arquivo.podeEditar(p);
+  const podeEliminar = Arquivo.podeEliminar(p);
   const relacionados = Arquivo.doQuadro((p.boards || [])[0]).filter((x) => x.id !== p.id).slice(0, 3);
 
   const iconeAnexo = { map: 'map', pdf: 'download', phone: 'phone', link: 'link' };
@@ -512,8 +513,8 @@ function ecraAviso() {
       discreto: true,
       accoes: `
         <button class="iconbtn" data-act="partilhar" data-id="${p.id}" aria-label="Partilhar este aviso">${ico('share')}</button>
-        ${podeGerir ? `<button class="iconbtn" data-act="editar" data-id="${p.id}" aria-label="Editar este aviso">${ico('edit')}</button>` : ''}
-        ${podeGerir ? `<button class="iconbtn iconbtn--perigo" data-act="pedir-eliminar" data-id="${p.id}" aria-label="Eliminar este aviso">${ico('trash')}</button>` : ''}`
+        ${podeEditar ? `<button class="iconbtn" data-act="editar" data-id="${p.id}" aria-label="Editar este aviso">${ico('edit')}</button>` : ''}
+        ${podeEliminar ? `<button class="iconbtn iconbtn--perigo" data-act="pedir-eliminar" data-id="${p.id}" aria-label="Eliminar este aviso">${ico('trash')}</button>` : ''}`
     })}
     <article class="post">
       <header class="post__head">
@@ -676,9 +677,6 @@ function ecraEntrar() {
         </label>
         <p class="erro" id="erro-entrar" role="alert" hidden></p>
         <button class="btn btn--solid btn--block" type="submit">Entrar</button>
-        <button class="btn btn--quiet btn--block" type="button" data-act="conta-exemplo">
-          Usar conta de exemplo
-        </button>
         <button class="btn btn--quiet btn--block" type="button" data-act="ir" data-hash="#/novidades">
           Ver avisos sem entrar
         </button>
@@ -783,6 +781,16 @@ function ecraCriar() {
     <div class="compose wrap">
       <div class="compose__main stack">
         <p class="lede">Adicione apenas as partes de que precisar. Pode retirá-las quando quiser.</p>
+
+        <div class="tipo-escolha">
+          <p class="eyebrow">Que tipo de aviso é</p>
+          <div class="segmented" role="radiogroup" aria-label="Tipo de aviso">
+            ${TIPOS.map((t) => `
+              <button type="button" role="radio" data-act="tipo" data-tipo="${esc(t)}"
+                      aria-checked="${(estado.valores.tipo || 'Aviso') === t}"
+                      aria-pressed="${(estado.valores.tipo || 'Aviso') === t}">${esc(t)}</button>`).join('')}
+          </div>
+        </div>
 
         ${estado.blocks.length ? estado.blocks.map((chave, i) => {
           const b = BLOCKS[chave];
@@ -912,8 +920,7 @@ function destinosResolvidos() {
 function ecraConta() {
   const s = sessao();
   const { proprios, administrados } = Arquivo.meus();
-  const papel = ehAdmin() ? 'Pode publicar em todos os quadros' : 'Responsável · ' + nomeQuadro(s.board);
-  const rascunho = Arquivo.rascunho();
+  const papel = s.papelLegivel || (ehAdmin() ? 'Pode publicar em todos os quadros' : 'Responsável · ' + nomeQuadro(s.board));
 
   return `
     <div class="account">
@@ -925,15 +932,6 @@ function ecraConta() {
       <button class="btn btn--solid btn--block" data-act="novo-aviso" data-hash="#/publicar">
         ${ico('plus')} Novo aviso
       </button>
-
-      ${rascunho ? `
-        <div class="rascunho">
-          <span>${ico('edit')} Rascunho por terminar: <strong>${esc(rascunho.valores && rascunho.valores.titulo || 'sem título')}</strong></span>
-          <span class="rascunho__accoes">
-            <button class="btn btn--sm btn--kraft" data-act="retomar-rascunho">Retomar</button>
-            <button class="btn btn--sm btn--quiet" data-act="deitar-rascunho">Deitar fora</button>
-          </span>
-        </div>` : ''}
 
       <p class="eyebrow" style="margin-top:14px">Os meus avisos · ${proprios.length}</p>
       <div class="mine-grid stack">
@@ -984,6 +982,43 @@ function ecraPerdido(tipo) {
     </div>`;
 }
 
+function ecraCarregando() {
+  return `
+    <div class="masthead">
+      <div class="masthead__text">
+        <span class="esq esq--eyebrow"></span>
+        <span class="esq esq--titulo"></span>
+        <span class="esq esq--linha"></span>
+      </div>
+    </div>
+    <div class="wrap">
+      <div class="stack grid-notices" aria-hidden="true">
+        ${Array.from({ length: 4 }).map(() => `
+          <div class="notice notice--esq">
+            <span class="esq esq--cabeca"></span>
+            <span class="esq esq--corpo"></span>
+          </div>`).join('')}
+      </div>
+      <p class="sr" role="status">A carregar os avisos…</p>
+    </div>`;
+}
+
+function ecraErroRede(err) {
+  const semSessao = err && err.codigo === 'autenticacao';
+  return `
+    <div class="wrap wrap--centro">
+      <div class="erro-rede" role="alert">
+        <span class="erro-rede__ico">${ico('cloud-off')}</span>
+        <h1 class="erro-rede__titulo" tabindex="-1">Não foi possível carregar os avisos</h1>
+        <p class="erro-rede__texto">${esc((err && err.mensagem) || 'Algo correu mal.')}</p>
+        <div class="erro-rede__accoes">
+          <button class="btn btn--solid" data-act="recarregar-tudo">${ico('refresh')} Tentar de novo</button>
+          ${semSessao ? `<button class="btn btn--quiet" data-act="ir" data-hash="#/entrar">Entrar</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
 const ECRAS = {
   feed: ecraFeed, boards: ecraQuadros, board: ecraQuadro, post: ecraAviso,
   search: ecraProcurar, login: ecraEntrar, compose: ecraCriar,
@@ -996,6 +1031,17 @@ const ECRAS = {
 const SUPERFICIE = { boards: 'cork', board: 'cork' };
 
 function desenhar() {
+  const r = Arquivo.estadoRede();
+
+  // Sem dados ainda não há ecrã que se possa desenhar: esqueleto ou erro.
+  if (!r.prontos) {
+    $('#view').innerHTML = r.erro ? ecraErroRede(r.erro) : ecraCarregando();
+    $('#main').dataset.surface = 'paper';
+    desenharNav();
+    desenharCamadas();
+    return;
+  }
+
   $('#view').innerHTML = (ECRAS[estado.ecra] || ecraFeed)();
   $('#main').dataset.surface = SUPERFICIE[estado.ecra] || 'paper';
   desenharNav();
@@ -1068,7 +1114,6 @@ function desenhoDaCamada(c) {
   if (c.tipo === 'anexo') return camadaAnexo(c);
   if (c.tipo === 'confirmar') return camadaConfirmar(c);
   if (c.tipo === 'previsualizar') return camadaPrevisualizar();
-  if (c.tipo === 'demo') return camadaDemo();
   return '';
 }
 
@@ -1201,42 +1246,6 @@ function camadaPrevisualizar() {
     </div>`;
 }
 
-function camadaDemo() {
-  const d = Arquivo.demo();
-  return `
-    <div class="camada camada--fundo" data-act="fundo">
-      <div class="demopanel" role="dialog" aria-modal="true" aria-label="Opções da demonstração">
-        <div class="visor__topo">
-          <span class="visor__titulo">Demonstração</span>
-          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
-        </div>
-        <div class="demopanel__row">
-          <p class="eyebrow">Permissões da utilizadora</p>
-          <div class="segmented">
-            <button data-act="papel" data-role="admin" aria-pressed="${d.role === 'admin'}">Administra tudo</button>
-            <button data-act="papel" data-role="responsavel" aria-pressed="${d.role !== 'admin'}">Um só quadro</button>
-          </div>
-        </div>
-        <div class="demopanel__row">
-          <p class="eyebrow">Protótipo</p>
-          <button class="switch" role="checkbox" aria-checked="${d.stamps}" data-act="interruptor-selos">
-            <span>Mostrar o selo NOVO</span>
-            <span class="switch__box">${ico('check')}</span>
-          </button>
-          <button class="switch" role="checkbox" aria-checked="${temSessao()}" data-act="interruptor-sessao">
-            <span>Sessão iniciada</span>
-            <span class="switch__box">${ico('check')}</span>
-          </button>
-        </div>
-        <div class="demopanel__row">
-          <p class="eyebrow">Dados</p>
-          <p class="nota">Os avisos que criar ficam guardados neste navegador${Arquivo.estadoDoDisco() === 'memoria' ? ' <strong>(só nesta sessão: o armazenamento está cheio ou indisponível)</strong>' : ''}.</p>
-          <button class="btn btn--quiet btn--block btn--sm" data-act="pedir-repor">${ico('refresh')} Repor demonstração</button>
-        </div>
-      </div>
-    </div>`;
-}
-
 /* ---------- Rascunho ---------- */
 
 function avisoDoRascunho() {
@@ -1247,7 +1256,7 @@ function avisoDoRascunho() {
   const links = [];
   if (v.local) links.push({ type: 'map', label: 'Ver o local no mapa', meta: v.local, destino: { morada: v.local } });
   if (v.ligacao) links.push({ type: 'link', label: 'Abrir a ligação', meta: v.ligacao, destino: { url: v.ligacao } });
-  if (v.pdf) links.push({ type: 'pdf', label: 'Descarregar o ficheiro', meta: v.pdf.tamanho || '', destino: { ficheiro: v.pdf.nome, tamanho: v.pdf.tamanho, paginas: 2 } });
+  if (v.pdf) links.push({ type: 'pdf', label: 'Descarregar o ficheiro', meta: v.pdf.tamanho || '', destino: { url: v.pdf.url, ficheiro: v.pdf.nome, tamanho: v.pdf.tamanho } });
   if (v.contacto) links.push({ type: 'phone', label: 'Ligar', meta: v.contacto, destino: { numero: v.contacto } });
 
   const descricao = String(v.texto || '').trim();
@@ -1339,66 +1348,117 @@ function haConteudo() {
 
 /* ---------- Ficheiros ---------- */
 
-const LADO_MAXIMO = 1400;
-
-function lerImagem(ficheiro, feito) {
-  const fr = new FileReader();
-  fr.onload = () => {
+/* Reduz a imagem antes de a subir: poupa dados de quem publica do telemóvel
+   e evita que o servidor guarde ficheiros de 8 MB sem necessidade. */
+function reduzirImagem(ficheiro) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(ficheiro);
     const img = new Image();
     img.onload = () => {
       let w = img.naturalWidth, h = img.naturalHeight;
       const medidas = w + '×' + h;
-      if (w > LADO_MAXIMO) { h = Math.round(h * LADO_MAXIMO / w); w = LADO_MAXIMO; }
+      const max = CONFIG.ladoMaximoImagem;
+      if (w > max) { h = Math.round(h * max / w); w = max; }
       const c = document.createElement('canvas');
       c.width = w; c.height = h;
       c.getContext('2d').drawImage(img, 0, 0, w, h);
-      let url;
-      try { url = c.toDataURL('image/jpeg', 0.72); } catch (e) { url = fr.result; }
-      feito({ dataUrl: url, nome: ficheiro.name, medidas: medidas, legenda: ficheiro.name });
+      URL.revokeObjectURL(url);
+      c.toBlob(
+        (blob) => resolve(blob ? { blob: blob, nome: ficheiro.name, medidas: medidas } : null),
+        'image/jpeg',
+        CONFIG.qualidadeImagem
+      );
     };
-    img.onerror = () => feito(null);
-    img.src = fr.result;
-  };
-  fr.onerror = () => feito(null);
-  fr.readAsDataURL(ficheiro);
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
 }
 
 const emKB = (n) => (n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
 
-function receberFicheiros(chave, ficheiros) {
+async function receberFicheiros(chave, ficheiros) {
   const b = BLOCKS[chave];
   const lista = Array.from(ficheiros || []);
   if (!lista.length) return;
 
-  if (b.accept === 'application/pdf') {
-    const f = lista[0];
-    estado.valores[chave] = { nome: f.name, tamanho: emKB(f.size) };
+  const zona = $(`[data-largar="${chave}"]`);
+  if (zona) zona.classList.add('drop--aSubir');
+  aviso(lista.length === 1 ? 'A enviar o ficheiro…' : 'A enviar os ficheiros…');
+
+  try {
+    if (b.accept === 'application/pdf') {
+      const f = lista[0];
+      const subido = await Api.subirFicheiro(f, f.name);
+      estado.valores[chave] = {
+        url: subido.url, nome: subido.nome || f.name,
+        tamanho: subido.tamanho || emKB(f.size)
+      };
+      desenhar();
+      aviso('«' + (subido.nome || f.name) + '» anexado.');
+      return;
+    }
+
+    const imagens = lista.filter((f) => /^image\//.test(f.type));
+    if (!imagens.length) { limparAviso(); aviso('Escolha um ficheiro de imagem.'); return; }
+
+    const preparadas = (await Promise.all(imagens.map(reduzirImagem))).filter(Boolean);
+    if (!preparadas.length) { limparAviso(); aviso('Não foi possível ler essa imagem.'); return; }
+
+    const subidas = await Promise.all(preparadas.map(async (r) => {
+      const dados = await Api.subirFicheiro(r.blob, r.nome);
+      return {
+        url: dados.url, nome: dados.nome || r.nome,
+        medidas: dados.medidas || r.medidas, legenda: dados.nome || r.nome
+      };
+    }));
+
+    if (b.campo === 'ficheiros') {
+      const antes = Array.isArray(estado.valores[chave]) ? estado.valores[chave] : [];
+      estado.valores[chave] = antes.concat(subidas);
+    } else {
+      estado.valores[chave] = subidas[0];
+    }
     desenhar();
-    aviso('«' + f.name + '» anexado.');
-    return;
+    aviso(subidas.length === 1 ? 'Imagem carregada.' : plural(subidas.length, 'imagem carregada', 'imagens carregadas') + '.');
+  } catch (err) {
+    avisoDeErro(err, null);
+  } finally {
+    const z = $(`[data-largar="${chave}"]`);
+    if (z) z.classList.remove('drop--aSubir');
   }
+}
 
-  const imagens = lista.filter((f) => /^image\//.test(f.type));
-  if (!imagens.length) { aviso('Escolha um ficheiro de imagem.'); return; }
+/* Enquanto um pedido está em voo o botão diz-no e não aceita segundo clique. */
+function marcarEnvio(el, aEnviar) {
+  estado.aEnviar = !!aEnviar;
+  if (!el || !el.classList) return;
+  el.classList.toggle('btn--aEnviar', !!aEnviar);
+  if (aEnviar) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
+  if (el.tagName === 'BUTTON') el.disabled = !!aEnviar;
+}
 
-  let porLerN = imagens.length;
-  const prontas = [];
-  imagens.forEach((f, i) => {
-    lerImagem(f, (r) => {
-      if (r) prontas[i] = r;
-      if (--porLerN === 0) {
-        const boas = prontas.filter(Boolean);
-        if (b.campo === 'ficheiros') {
-          const antes = Array.isArray(estado.valores[chave]) ? estado.valores[chave] : [];
-          estado.valores[chave] = antes.concat(boas);
-        } else {
-          estado.valores[chave] = boas[0];
-        }
-        desenhar();
-        aviso(boas.length === 1 ? 'Imagem carregada.' : plural(boas.length, 'imagem carregada', 'imagens carregadas') + '.');
-      }
-    });
+/* O servidor pode devolver erros por campo: mostram-se junto de cada um. */
+function mostrarCamposComErro(campos) {
+  Object.keys(campos || {}).forEach((nome) => {
+    const chave = { title: 'titulo', body: 'texto', when: 'data', contact: 'contacto' }[nome] || nome;
+    const campo = $('#c-' + chave);
+    if (!campo) return;
+    campo.setAttribute('aria-invalid', 'true');
+    const bloco = campo.closest('.block');
+    if (bloco && !bloco.querySelector('.erro-campo')) {
+      const p = document.createElement('p');
+      p.className = 'erro-campo';
+      p.textContent = campos[nome];
+      bloco.appendChild(p);
+    }
   });
+}
+
+/* Mostra o erro numa mensagem, com repetição quando faz sentido tentar de novo. */
+function avisoDeErro(err, repetir) {
+  const msg = (err && err.mensagem) || 'Algo correu mal.';
+  const podeRepetir = err && (err.codigo === 'rede' || err.codigo === 'tempo' || err.codigo === 'servidor');
+  aviso(msg, podeRepetir && repetir ? { etiqueta: 'Tentar de novo', act: repetir } : null);
 }
 
 /* ---------- Ações ---------- */
@@ -1409,7 +1469,8 @@ const ACCOES = {
   voltar: (el) => voltar(el.dataset.hash),
 
   'abrir-aviso': (el) => {
-    if (Arquivo.marcarLido(el.dataset.id)) { /* deixa de estar por ler */ }
+    // Não se espera pelo servidor para abrir: a marca cai já na cache.
+    Arquivo.marcarLido(el.dataset.id);
     ir('#/aviso/' + el.dataset.id);
   },
 
@@ -1432,20 +1493,24 @@ const ACCOES = {
   'confirmar-novo': (el) => {
     const destino = el.dataset.id || '#/publicar';
     limparRascunho();
-    Arquivo.limparRascunho();
     fecharCamada(true);
     ir(destino);
   },
 
   editar: (el) => ir('#/editar/' + el.dataset.id),
 
-  'ler-tudo': () => {
-    const n = Arquivo.marcarTudoLido();
-    desenhar();
-    aviso(n ? plural(n, 'aviso marcado como lido', 'avisos marcados como lidos') + '.' : 'Já estava tudo lido.');
+  'ler-tudo': async () => {
+    try {
+      const n = await Arquivo.marcarTudoLido();
+      aviso(n ? plural(n, 'aviso marcado como lido', 'avisos marcados como lidos') + '.' : 'Já estava tudo lido.');
+    } catch (err) {
+      avisoDeErro(err, 'ler-tudo');
+    }
   },
 
   filtro: (el) => { estado.filtro = el.dataset.tipo || null; desenhar(); },
+
+  tipo: (el) => { estado.valores.tipo = el.dataset.tipo; desenhar(); },
 
   ordem: () => { estado.ordem = estado.ordem === 'recentes' ? 'antigos' : 'recentes'; desenhar(); },
 
@@ -1537,7 +1602,6 @@ const ACCOES = {
 
   'confirmar-descartar': () => {
     limparRascunho();
-    Arquivo.limparRascunho();
     fecharCamada(true);
     substituir('#/a-minha-conta');
     aviso('Aviso descartado.');
@@ -1567,31 +1631,37 @@ const ACCOES = {
 
   previsualizar: () => abrirCamada({ tipo: 'previsualizar' }),
 
-  publicar: () => {
+  publicar: async (el) => {
     const alvos = destinosResolvidos();
     if (!alvos.length) { aviso('Escolha pelo menos um quadro.'); return; }
+    if (estado.aEnviar) return;
 
     const base = avisoDoRascunho();
-    if (estado.editingId) {
-      const p = Arquivo.atualizar(estado.editingId, {
-        boards: alvos, title: base.title, summary: base.summary, body: base.body,
-        when: base.when, hero: base.hero, gallery: base.gallery, links: base.links,
-        contact: base.contact
-      });
-      const id = p.id;
-      limparRascunho();
-      Arquivo.limparRascunho();
-      substituir('#/aviso/' + id);
-      aviso('Alterações guardadas.');
-      return;
-    }
+    const editar = estado.editingId;
+    marcarEnvio(el, true);
 
-    delete base.id;
-    const criado = Arquivo.criar(base);
-    limparRascunho();
-    Arquivo.limparRascunho();
-    substituir('#/a-minha-conta');
-    aviso('Publicado em ' + alvos.map(nomeQuadro).join(', ') + '.');
+    try {
+      if (editar) {
+        const p = await Arquivo.atualizar(editar, {
+          boards: alvos, kind: base.kind, title: base.title, summary: base.summary,
+          body: base.body, when: base.when, hero: base.hero, gallery: base.gallery,
+          links: base.links, contact: base.contact
+        });
+        limparRascunho();
+        substituir('#/aviso/' + p.id);
+        aviso('Alterações guardadas.');
+      } else {
+        delete base.id;
+        await Arquivo.criar(Arquivo.paraEnvio(Object.assign(base, { boards: alvos })));
+        limparRascunho();
+        substituir('#/a-minha-conta');
+        aviso('Publicado em ' + alvos.map(nomeQuadro).join(', ') + '.');
+      }
+    } catch (err) {
+      marcarEnvio(el, false);
+      if (err.campos) mostrarCamposComErro(err.campos);
+      avisoDeErro(err, 'publicar');
+    }
   },
 
   /* --- eliminar --- */
@@ -1605,25 +1675,35 @@ const ACCOES = {
     });
   },
 
-  'confirmar-eliminar': (el) => {
-    const noProprio = estado.ecra === 'post' && estado.postId === el.dataset.id;
-    const r = Arquivo.eliminar(el.dataset.id);
-    fecharCamada(noProprio);
-    if (!r) return;
-    estado.eliminado = r;
-    if (noProprio) substituir('#/a-minha-conta');
-    else desenhar();
-    aviso('«' + r.aviso.title + '» eliminado.', { etiqueta: 'Anular', act: 'anular-eliminar' });
+  'confirmar-eliminar': async (el) => {
+    const id = el.dataset.id;
+    const noProprio = estado.ecra === 'post' && estado.postId === id;
+    marcarEnvio(el, true);
+    try {
+      const r = await Arquivo.eliminar(id);
+      fecharCamada(noProprio);
+      if (!r) return;
+      estado.eliminado = r;
+      if (noProprio) substituir('#/a-minha-conta');
+      aviso('«' + r.aviso.title + '» eliminado.', { etiqueta: 'Anular', act: 'anular-eliminar' });
+    } catch (err) {
+      marcarEnvio(el, false);
+      avisoDeErro(err, null);
+    }
   },
 
-  'anular-eliminar': () => {
+  'anular-eliminar': async () => {
     if (!estado.eliminado) return;
-    Arquivo.restaurar(estado.eliminado.aviso, estado.eliminado.indice);
-    const t = estado.eliminado.aviso.title;
+    const guardado = estado.eliminado;
     estado.eliminado = null;
     limparAviso();
-    desenhar();
-    aviso('«' + t + '» reposto.');
+    try {
+      await Arquivo.restaurar(guardado.aviso, guardado.indice);
+      aviso('«' + guardado.aviso.title + '» reposto.');
+    } catch (err) {
+      estado.eliminado = guardado;
+      avisoDeErro(err, 'anular-eliminar');
+    }
   },
 
   /* --- camadas --- */
@@ -1648,8 +1728,6 @@ const ACCOES = {
   'fechar-camada': () => fecharCamada(),
 
   fundo: (el, ev) => { if (ev.target === el) fecharCamada(); },
-
-  demo: () => abrirCamada({ tipo: 'demo' }),
 
   /* --- partilhar e copiar --- */
   partilhar: async (el) => {
@@ -1676,15 +1754,6 @@ const ACCOES = {
   },
 
   /* --- sessão --- */
-  'conta-exemplo': () => {
-    const u = $('#campo-utilizador'), pw = $('#campo-palavra');
-    if (u) u.value = CONTA_EXEMPLO.utilizador;
-    if (pw) pw.value = 'demonstracao';
-    const erro = $('#erro-entrar');
-    if (erro) erro.hidden = true;
-    if (u) u.focus();
-  },
-
   'ver-palavra': (el) => {
     const campo = $('#campo-palavra');
     if (!campo) return;
@@ -1703,67 +1772,19 @@ const ACCOES = {
     });
   },
 
-  'confirmar-sair': () => {
-    Arquivo.sair();
-    limparRascunho();
+  'confirmar-sair': async () => {
     fecharCamada(true);
+    limparRascunho();
+    await Arquivo.sair();
     substituir('#/novidades');
     aviso('Sessão terminada. Pode continuar a ler os avisos.');
   },
 
-  /* --- painel da demonstração --- */
-  papel: (el) => {
-    Arquivo.definirDemo({ role: el.dataset.role });
-    // Baixar a permissão não pode deixar um destino inválido escolhido.
-    const permitidos = Arquivo.quadrosPermitidos();
-    if (estado.mode === 'all' && !ehAdmin()) estado.mode = 'mine';
-    estado.picked = estado.picked.filter((id) => permitidos.indexOf(id) > -1);
-    desenharCamadas();
-    desenhar();
-  },
-
-  'interruptor-selos': () => {
-    Arquivo.definirDemo({ stamps: !Arquivo.demo().stamps });
-    desenharCamadas();
-    desenhar();
-  },
-
-  'interruptor-sessao': () => {
-    if (temSessao()) Arquivo.sair(); else Arquivo.entrar(CONTA_EXEMPLO.utilizador);
-    desenharCamadas();
+  'recarregar-tudo': async () => {
+    limparAviso();
+    await Arquivo.arrancar();
     encaminhar();
   },
-
-  'pedir-repor': () => {
-    abrirCamada({
-      tipo: 'confirmar', titulo: 'Repor a demonstração?',
-      texto: 'Os avisos que criou são apagados e tudo volta ao estado inicial.',
-      confirmar: 'Repor', act: 'confirmar-repor', perigo: true
-    });
-  },
-
-  'confirmar-repor': () => {
-    Arquivo.repor();
-    limparRascunho();
-    estado.filtro = null;
-    estado.query = '';
-    fecharCamada(true);
-    substituir('#/novidades');
-    aviso('Demonstração reposta.');
-  },
-
-  'retomar-rascunho': () => {
-    const r = Arquivo.rascunho();
-    if (!r) return;
-    estado.blocks = r.blocks || [];
-    estado.valores = r.valores || {};
-    estado.editingId = r.editingId || null;
-    estado.mode = r.mode || 'mine';
-    estado.picked = r.picked || [];
-    ir('#/publicar');
-  },
-
-  'deitar-rascunho': () => { Arquivo.limparRascunho(); desenhar(); aviso('Rascunho deitado fora.'); },
 
   'fechar-aviso': () => limparAviso()
 };
@@ -1778,16 +1799,6 @@ function actualizarProcura() {
   const q = estado.query.trim().toLowerCase();
   $$('[data-act="atalho"]').forEach((c) =>
     c.setAttribute('aria-pressed', String(c.dataset.q.toLowerCase() === q)));
-}
-
-/* Guarda o rascunho no Arquivo quando se sai do formulário com conteúdo. */
-function talvezGuardarRascunho() {
-  if (estado.ecra !== 'compose' && estado.ecra !== 'targets') return;
-  if (estado.editingId || !haConteudo()) return;
-  Arquivo.guardarRascunho({
-    blocks: estado.blocks, valores: estado.valores,
-    editingId: estado.editingId, mode: estado.mode, picked: estado.picked
-  });
 }
 
 /* ---------- Escutas ---------- */
@@ -1865,10 +1876,24 @@ document.addEventListener('submit', (ev) => {
       return;
     }
     erro.hidden = true;
+    const botao = ev.target.querySelector('button[type="submit"]');
     const destino = estado.destinoAposEntrar || '#/a-minha-conta';
-    Arquivo.entrar(u.value);
-    substituir(destino);
-    aviso('Sessão iniciada. Já pode publicar.');
+    marcarEnvio(botao, true);
+
+    Arquivo.entrar(u.value.trim(), pw.value).then(() => {
+      marcarEnvio(botao, false);
+      substituir(destino);
+      aviso('Sessão iniciada. Já pode publicar.');
+    }).catch((err) => {
+      marcarEnvio(botao, false);
+      erro.textContent = err.codigo === 'autenticacao'
+        ? 'Utilizador ou palavra-passe errados.'
+        : err.mensagem;
+      erro.hidden = false;
+      u.setAttribute('aria-invalid', String(err.codigo === 'autenticacao'));
+      pw.setAttribute('aria-invalid', String(err.codigo === 'autenticacao'));
+      pw.focus();
+    });
     return;
   }
 
@@ -1908,9 +1933,6 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
-window.addEventListener('beforeunload', talvezGuardarRascunho);
-window.addEventListener('pagehide', talvezGuardarRascunho);
-
 /* ---------- Arranque ---------- */
 
 function montarEstrutura() {
@@ -1939,4 +1961,23 @@ window.addEventListener('hashchange', () => {
 
 montarEstrutura();
 if (!location.hash) history.replaceState({ i: 0, y: 0 }, '', '#/novidades');
-encaminhar();
+
+/* O servidor pode recusar o token a qualquer momento. */
+Api.aoPerderSessao(() => {
+  Arquivo.sessaoPerdida();
+  if (PRIVADAS.indexOf(estado.ecra) > -1) {
+    substituir('#/entrar?destino=' + encodeURIComponent(location.hash || '#/a-minha-conta'));
+    aviso('A sua sessão expirou. Entre outra vez.');
+  } else {
+    desenhar();
+  }
+});
+
+/* Qualquer mudança na cache volta a pintar: é assim que as escritas
+   otimistas aparecem no ecrã antes de o servidor responder. */
+Arquivo.aoMudar(() => desenhar());
+
+desenhar();                       // esqueleto enquanto o primeiro pedido vai e vem
+Arquivo.arrancar().then(() => {
+  if (Arquivo.estadoRede().prontos) encaminhar();
+});

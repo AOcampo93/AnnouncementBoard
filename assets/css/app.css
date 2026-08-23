@@ -613,17 +613,6 @@ a{color:var(--link)}
 
 
 /* Painel da demonstração */
-.demotoggle{
-  position:fixed;right:16px;z-index:50;
-  bottom:calc(100px + env(safe-area-inset-bottom));
-  width:54px;height:54px;border-radius:50%;
-  background:var(--ink);color:var(--paper);
-  border:var(--b);box-shadow:var(--sh-2);
-  display:flex;align-items:center;justify-content:center;
-}
-.demotoggle .ico{width:26px;height:26px}
-.demotoggle{transition:transform .18s ease}
-body:has(.toast:not([hidden])) .demotoggle{transform:translateY(-76px)}
 
 .demopanel{
   width:min(420px,100%);
@@ -682,7 +671,6 @@ body:has(.toast:not([hidden])) .demotoggle{transform:translateY(-76px)}
 
   /* A navegação sobe: barra superior em vez de barra inferior */
   .tabbar{display:none}
-  .demotoggle{bottom:24px}
   .toast{
     left:auto;right:32px;bottom:32px;max-width:420px;
   }
@@ -881,7 +869,6 @@ body:has(.toast:not([hidden])) .demotoggle{transform:translateY(-76px)}
   .searchhead{max-width:720px}
 
   .toast{right:40px;bottom:40px}
-  .demotoggle{right:24px;bottom:24px}
 
   .login{max-width:560px;padding:64px var(--pad)}
   .login__title{font-size:46px}
@@ -1256,8 +1243,7 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 
 @media (min-width:768px){
   .toast{left:auto;right:32px;bottom:32px;max-width:460px}
-  body:has(.toast:not([hidden])) .demotoggle{transform:translateY(-84px)}
-  .gal__img,img.gal__img{height:120px}
+    .gal__img,img.gal__img{height:120px}
   .minecard__actions .btn{flex:0 1 auto;min-width:0;padding:0 18px}
 }
 
@@ -1274,4 +1260,109 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 }
 
 /* Com uma camada aberta, o comando da demonstração não pode competir com ela. */
-body.com-camada .demotoggle{pointer-events:none;opacity:.3}
+
+/* ============================================================
+   PARTE 3 — estados de rede
+   A app fala com um servidor: há espera, há falha, e há escrita
+   em voo. Nenhum dos três pode acontecer em silêncio.
+   ============================================================ */
+
+/* ---------- Esqueleto de carregamento ---------- */
+
+.esq{
+  display:block;
+  background:linear-gradient(90deg,#e8e0cf 25%,#f1ead9 50%,#e8e0cf 75%);
+  background-size:200% 100%;
+  border-radius:4px;
+  animation:aCarregar 1.4s ease-in-out infinite;
+}
+@keyframes aCarregar{from{background-position:200% 0}to{background-position:-200% 0}}
+
+.esq--eyebrow{width:180px;height:14px}
+.esq--titulo{width:min(320px,70%);height:42px;border-radius:6px}
+.esq--linha{width:min(420px,90%);height:20px}
+.esq--cabeca{height:42px;border-radius:0}
+.esq--corpo{height:132px;border-radius:0}
+
+.notice--esq{
+  display:flex;flex-direction:column;gap:0;
+  pointer-events:none;
+  box-shadow:var(--sh-1);
+}
+.notice--esq .esq{border-radius:0}
+
+@media (prefers-reduced-motion:reduce){
+  .esq{animation:none;background:#e8e0cf}
+}
+
+/* ---------- Falha de rede ---------- */
+
+.wrap--centro{
+  display:flex;align-items:center;justify-content:center;
+  min-height:60dvh;
+}
+.erro-rede{
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+  max-width:460px;padding:32px 26px;text-align:center;
+  background:var(--card);border:var(--b);border-radius:var(--r-lg);
+  box-shadow:var(--sh-3);
+}
+.erro-rede__ico{
+  display:flex;align-items:center;justify-content:center;
+  width:64px;height:64px;
+  background:var(--sticky);border:var(--b);border-radius:50%;
+  box-shadow:3px 3px 0 rgba(31,27,22,.2);
+}
+.erro-rede__ico .ico{width:32px;height:32px}
+.erro-rede__titulo{font:800 26px/1.15 var(--sans);text-wrap:balance}
+.erro-rede__texto{font:400 18px/1.45 var(--sans);color:var(--mute);text-wrap:pretty}
+.erro-rede__accoes{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+
+/* ---------- Escrita em voo ---------- */
+
+.btn--aEnviar{position:relative;color:transparent !important}
+.btn--aEnviar::after{
+  content:"";position:absolute;top:50%;left:50%;
+  width:22px;height:22px;margin:-11px 0 0 -11px;
+  border:3px solid currentColor;border-top-color:transparent;border-radius:50%;
+  color:var(--paper);
+  animation:aRodar .7s linear infinite;
+}
+.btn--quiet.btn--aEnviar::after,
+.btn--kraft.btn--aEnviar::after{color:var(--ink)}
+@keyframes aRodar{to{transform:rotate(360deg)}}
+
+@media (prefers-reduced-motion:reduce){
+  .btn--aEnviar::after{animation:none;border-top-color:currentColor;opacity:.5}
+}
+
+/* Um aviso ainda por confirmar pelo servidor mostra-se a meia-luz. */
+.notice[data-aenviar="true"],
+.minecard[data-aenviar="true"]{opacity:.6}
+
+/* ---------- Erros por campo ---------- */
+
+.erro-campo{
+  margin-top:8px;
+  font:600 15px/1.4 var(--sans);color:var(--stamp);
+}
+
+/* ---------- Envio de ficheiros ---------- */
+
+.drop--aSubir{
+  border-color:var(--ink);
+  background:var(--sticky);
+  opacity:.75;
+  pointer-events:none;
+}
+
+/* ---------- Escolha do tipo de aviso ---------- */
+
+.tipo-escolha{display:flex;flex-direction:column;gap:10px}
+.tipo-escolha .segmented{flex-wrap:wrap}
+.tipo-escolha .segmented button{min-width:0;flex:1 1 44%}
+.segmented button[aria-checked="true"]{background:var(--ink);color:var(--paper);font-weight:700}
+
+@media (min-width:768px){
+  .tipo-escolha .segmented button{flex:1 1 0}
+}
