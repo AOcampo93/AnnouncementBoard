@@ -728,7 +728,7 @@ function campoDoBloco(chave) {
         <div class="ficheiro">
           ${ehPdf
             ? `<span class="ficheiro__pdf">${ico('file')}</span>`
-            : `<img class="ficheiro__img" src="${v.dataUrl}" alt="${esc(v.nome)}">`}
+            : `<img class="ficheiro__img" src="${esc(v.url || v.dataUrl || '')}" alt="${esc(v.nome)}">`}
           <span class="ficheiro__info">
             <span class="ficheiro__nome">${esc(v.nome)}</span>
             <span class="ficheiro__meta tnum">${esc(v.medidas || v.tamanho || '')}</span>
@@ -752,7 +752,7 @@ function campoDoBloco(chave) {
       <div class="galeria-edit">
         ${fotos.map((f, i) => `
           <span class="galeria-edit__item">
-            <img src="${f.dataUrl}" alt="${esc(f.nome)}">
+            <img src="${esc(f.url || f.dataUrl || '')}" alt="${esc(f.nome)}">
             <button class="galeria-edit__x" data-act="tirar-foto" data-chave="${chave}" data-i="${i}"
                     aria-label="Retirar ${esc(f.nome)}">${ico('close')}</button>
           </span>`).join('')}
