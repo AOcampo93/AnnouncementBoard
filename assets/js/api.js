@@ -197,6 +197,14 @@ const Api = (function () {
       return pedir('POST', '/ficheiros', { formulario: f });
     },
 
+    /* ----- contas (só o bispado) ----- */
+    contas: () => ler('/utilizadores'),
+    criarConta: (dados) => pedir('POST', '/utilizadores', { corpo: dados }),
+    editarConta: (id, patch) => pedir('PATCH', '/utilizadores/' + id, { corpo: patch }),
+    reporPalavra: (id, palavra) => pedir('POST', '/utilizadores/' + id + '/palavra', { corpo: { palavra } }),
+    apagarConta: (id) => pedir('DELETE', '/utilizadores/' + id),
+    mudarPalavra: (atual, nova) => pedir('PATCH', '/sessao/palavra', { corpo: { atual, nova } }),
+
     /* ----- sessão ----- */
     sessaoAtual: () => ler('/sessao', { proprioLogin: true }),
     entrar: (utilizador, palavra) => pedir('POST', '/sessao', {

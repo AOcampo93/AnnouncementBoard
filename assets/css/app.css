@@ -1394,3 +1394,43 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 @media (min-width:768px){
   .tipo-escolha .segmented{grid-template-columns:repeat(4,1fr)}
 }
+
+/* ============================================================
+   PARTE 4 — contas e papéis
+   ============================================================ */
+
+.conta{
+  display:flex;flex-direction:column;gap:8px;
+  padding:16px;
+  background:var(--card);border:var(--b);border-radius:var(--r);
+  box-shadow:var(--sh-2);
+}
+.conta--inativa{background:var(--dim);border-style:dashed;border-color:var(--pencil)}
+.conta__topo{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.conta__nome{font:700 21px/1.2 var(--sans)}
+.conta__eu{font:400 15px var(--sans);color:var(--mute-3)}
+.conta__user{font:400 15px var(--mono);color:var(--mute-2)}
+.conta__papel{font:400 16px/1.4 var(--sans);color:var(--mute)}
+.conta__aviso{font:600 15px var(--sans);color:var(--stamp)}
+.conta__accoes{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px}
+.conta__accoes .btn{flex:1 1 auto;min-width:0;white-space:nowrap}
+
+.conta__atalhos{display:flex;flex-wrap:wrap;gap:12px;margin-top:8px}
+.conta__atalhos .btn{flex:1;min-width:180px}
+
+/* A etiqueta diz o papel de relance, com forma além da cor. */
+.etiqueta-papel{
+  padding:5px 12px;
+  border:var(--b);border-radius:4px;
+  font:700 13px var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  white-space:nowrap;
+}
+.etiqueta-papel--bispado{background:var(--sticky)}
+.etiqueta-papel--presidencia{background:var(--kraft)}
+.etiqueta-papel--leitor{background:var(--paper);border-style:dashed;color:var(--mute)}
+
+/* Três papéis cabem em fila mesmo em ecrã estreito. */
+.segmented--papeis{grid-template-columns:repeat(3,1fr)}
+.segmented--papeis button{font-size:15px;min-height:54px}
+
+.dialogo .field{width:100%}

@@ -21,7 +21,10 @@ const estado = {
   picked: [],
   camada: null,          // sobreposição aberta
   eliminado: null,       // último aviso eliminado, para anular
-  aEnviar: false         // há um pedido de escrita em voo
+  aEnviar: false,        // há um pedido de escrita em voo
+  contas: null,          // lista de contas, carregada a pedido
+  contaId: null,         // conta em edição
+  forma: {}              // valores do formulário de conta
 };
 
 /* ---------- Utilitários ---------- */
@@ -42,7 +45,9 @@ const nomeQuadro = (id) => (quadro(id) || {}).name || '';
 
 const sessao = () => Arquivo.sessao();
 const temSessao = () => !!Arquivo.sessao();
-const ehAdmin = () => Arquivo.ehAdmin();
+const ehBispado    = () => Arquivo.papel() === 'bispado';
+const podePublicar = () => Arquivo.podePublicar();
+const podeGerirContas = () => Arquivo.podeGerirContas();
 
 /* Quem já leu o quê é do servidor: vem marcado em cada aviso. */
 const porLer = (p) => Arquivo.porLer(p);
@@ -128,10 +133,14 @@ const ROTAS = [
   { re: /^\/publicar$/,              ecra: 'compose' },
   { re: /^\/publicar\/destino$/,     ecra: 'targets' },
   { re: /^\/editar\/([\w-]+)$/,      ecra: 'compose', chave: 'editId' },
-  { re: /^\/a-minha-conta$/,         ecra: 'mine' }
+  { re: /^\/a-minha-conta$/,         ecra: 'mine' },
+  { re: /^\/palavra-passe$/,         ecra: 'palavra' },
+  { re: /^\/contas$/,                ecra: 'contas' },
+  { re: /^\/contas\/nova$/,          ecra: 'conta' },
+  { re: /^\/contas\/(\d+)$/,         ecra: 'conta', chave: 'contaId' }
 ];
 
-const PRIVADAS = ['compose', 'targets', 'mine'];
+const PRIVADAS = ['compose', 'targets', 'mine', 'palavra', 'contas', 'conta'];
 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
@@ -201,6 +210,9 @@ function encaminhar() {
     if (!Arquivo.aviso(achado.valor)) { estado.ecra = 'perdido'; estado.perdido = 'aviso'; desenhar(); return; }
     estado.postId = achado.valor;
   }
+  if (achado.chave === 'contaId') estado.contaId = Number(achado.valor);
+  else if (ecra === 'conta') estado.contaId = null;
+
   if (achado.chave === 'editId') {
     const alvo = Arquivo.aviso(achado.valor);
     if (!alvo) { estado.ecra = 'perdido'; estado.perdido = 'aviso'; desenhar(); return; }
@@ -217,6 +229,13 @@ function encaminhar() {
     substituir(params.destino || '#/a-minha-conta');
     return;
   }
+  // Gerir contas é exclusivo do bispado.
+  if ((ecra === 'contas' || ecra === 'conta') && temSessao() && !podeGerirContas()) {
+    substituir('#/a-minha-conta');
+    aviso('Só o bispado pode gerir contas.');
+    return;
+  }
+
   // Não se escolhe destino sem haver aviso nenhum para publicar.
   if (ecra === 'targets' && !estado.blocks.length) {
     substituir('#/publicar');
@@ -243,15 +262,54 @@ function encaminhar() {
   // mantém «Procurar» marcado, não «Novidades».
   const mapa = {
     feed: 'feed', boards: 'boards', board: 'boards', search: 'search',
-    login: 'mine', compose: 'mine', targets: 'mine', mine: 'mine'
+    login: 'mine', compose: 'mine', targets: 'mine', mine: 'mine',
+    palavra: 'mine', contas: 'mine', conta: 'mine'
   };
   if (mapa[ecra]) estado.seccao = mapa[ecra];
 
   desenhar();
+  prepararEcra();
 
   const y = veioDeVoltar && history.state && history.state.y;
   veioDeVoltar = false;
   window.scrollTo(0, y || 0);
+}
+
+/* Alguns ecrãs precisam de dados que não estão na cache principal.
+   Pedem-se depois de desenhar, para o esqueleto aparecer já. */
+async function prepararEcra() {
+  if (estado.ecra === 'contas') {
+    if (estado.contas !== null) return;
+    try {
+      estado.contas = await Arquivo.contas();
+    } catch (err) {
+      estado.contas = [];
+      avisoDeErro(err, null);
+    }
+    if (estado.ecra === 'contas') desenhar();
+    return;
+  }
+
+  if (estado.ecra === 'conta') {
+    if (!estado.contaId) {
+      estado.forma = { papel: 'presidencia', quadros: [], ativo: true };
+      desenhar();
+      return;
+    }
+    try {
+      const lista = estado.contas || await Arquivo.contas();
+      estado.contas = lista;
+      const c = lista.find((x) => x.id === estado.contaId);
+      if (!c) { substituir('#/contas'); aviso('Essa conta já não existe.'); return; }
+      estado.forma = {
+        utilizador: c.utilizador, nome: c.nome, papel: c.papel,
+        quadros: (c.quadros || []).slice(), ativo: c.ativo
+      };
+      desenhar();
+    } catch (err) {
+      avisoDeErro(err, null);
+    }
+  }
 }
 
 window.addEventListener('popstate', (e) => {
@@ -348,6 +406,9 @@ function botaoCriar(quadroId) {
   if (!temSessao()) {
     return `<button class="btn btn--kraft" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`;
   }
+  // Uma conta de leitura não tem onde publicar: mostrar o botão seria
+  // prometer uma porta que dá para uma parede.
+  if (!podePublicar()) return '';
   const destino = quadroId ? `#/publicar?quadro=${quadroId}` : '#/publicar';
   return `<button class="btn btn--solid btn--compacto" data-act="novo-aviso" data-hash="${destino}">${ico('plus')} Novo aviso</button>`;
 }
@@ -863,7 +924,7 @@ function ecraDestino() {
 
       <div role="radiogroup" aria-label="Onde publicar" class="stack">
         ${modos.map((m) => {
-          const bloqueado = m.id === 'all' && !ehAdmin();
+          const bloqueado = m.id === 'all' && !ehBispado();
           return `
             <button class="mode ${bloqueado ? 'mode--locked' : ''}" role="radio"
                     aria-checked="${!bloqueado && estado.mode === m.id}"
@@ -911,16 +972,16 @@ function ecraDestino() {
 
 function destinosResolvidos() {
   const permitidos = Arquivo.quadrosPermitidos();
-  if (estado.mode === 'all') return ehAdmin() ? BOARDS.map((b) => b.id) : [];
+  if (estado.mode === 'all') return ehBispado() ? BOARDS.map((b) => b.id) : [];
   if (estado.mode === 'pick') return estado.picked.filter((id) => permitidos.indexOf(id) > -1);
   const meu = sessao() ? sessao().board : null;
   return meu && permitidos.indexOf(meu) > -1 ? [meu] : [];
 }
 
-function ecraConta() {
+function ecraMinhaConta() {
   const s = sessao();
   const { proprios, administrados } = Arquivo.meus();
-  const papel = s.papelLegivel || (ehAdmin() ? 'Pode publicar em todos os quadros' : 'Responsável · ' + nomeQuadro(s.board));
+  const papel = s.papelLegivel || s.papelNome || '';
 
   return `
     <div class="account">
@@ -933,6 +994,11 @@ function ecraConta() {
         ${ico('plus')} Novo aviso
       </button>
 
+      <div class="conta__atalhos">
+        ${podeGerirContas() ? `<button class="btn btn--kraft" data-act="ir" data-hash="#/contas">${ico('user')} Gerir contas</button>` : ''}
+        <button class="btn btn--quiet" data-act="ir" data-hash="#/palavra-passe">${ico('lock')} Mudar palavra-passe</button>
+      </div>
+
       <p class="eyebrow" style="margin-top:14px">Os meus avisos · ${proprios.length}</p>
       <div class="mine-grid stack">
         ${proprios.length ? proprios.map((p) => fichaGestao(p, true)).join('')
@@ -943,7 +1009,7 @@ function ecraConta() {
       ${administrados.length ? `
         <p class="eyebrow" style="margin-top:22px">Que administra · ${administrados.length}</p>
         <div class="mine-grid stack">
-          ${administrados.map((p) => fichaGestao(p, ehAdmin())).join('')}
+          ${administrados.map((p) => fichaGestao(p, Arquivo.podeEliminar(p))).join('')}
         </div>` : ''}
 
       <button class="btn btn--quiet btn--block" data-act="sair" style="margin-top:26px">
@@ -1019,10 +1085,147 @@ function ecraErroRede(err) {
     </div>`;
 }
 
+
+/* ---------- Contas (só o bispado) ---------- */
+
+const PAPEIS = [
+  { id: 'bispado',     nome: 'Bispado',     nota: 'Pode tudo, em todos os quadros, e gere as contas' },
+  { id: 'presidencia', nome: 'Presidência', nota: 'Publica, edita e apaga nos quadros que lhe atribuir' },
+  { id: 'leitor',      nome: 'Leitor',      nota: 'Só pode ler' }
+];
+
+const nomeDoPapel = (id) => (PAPEIS.find((p) => p.id === id) || {}).nome || id;
+
+function ecraContas() {
+  const lista = estado.contas;
+
+  return `
+    ${barra('#/a-minha-conta', 'Contas', {
+      accoes: `<button class="iconbtn" data-act="ir" data-hash="#/contas/nova" aria-label="Nova conta">${ico('plus')}</button>`
+    })}
+    <div class="wrap stack">
+      <p class="lede">Quem tem conta pode entrar e publicar. Para ler os avisos não é preciso conta nenhuma.</p>
+
+      <button class="btn btn--solid btn--block" data-act="ir" data-hash="#/contas/nova">
+        ${ico('plus')} Nova conta
+      </button>
+
+      ${lista === null
+        ? '<p class="contagem">A carregar as contas…</p>'
+        : lista.length
+          ? `<div class="mine-grid stack">${lista.map(fichaConta).join('')}</div>`
+          : vazio('Ainda não há contas além da sua.')}
+    </div>`;
+}
+
+function fichaConta(c) {
+  const eu = sessao() && c.utilizador === sessao().utilizador;
+  return `
+    <div class="conta ${c.ativo ? '' : 'conta--inativa'}">
+      <div class="conta__topo">
+        <span class="conta__nome">${esc(c.nome)}${eu ? ' <span class="conta__eu">(você)</span>' : ''}</span>
+        <span class="etiqueta-papel etiqueta-papel--${c.papel}">${esc(nomeDoPapel(c.papel))}</span>
+      </div>
+      <p class="conta__user mono">@${esc(c.utilizador)}</p>
+      <p class="conta__papel">${esc(c.papelLegivel)}</p>
+      ${c.ativo ? '' : '<p class="conta__aviso">Conta desativada: não pode entrar.</p>'}
+      <div class="conta__accoes">
+        <button class="btn btn--sm btn--kraft" data-act="ir" data-hash="#/contas/${c.id}">${ico('edit')} Editar</button>
+        <button class="btn btn--sm btn--quiet" data-act="pedir-palavra" data-id="${c.id}" data-nome="${esc(c.nome)}">${ico('lock')} Palavra-passe</button>
+        ${eu ? '' : `<button class="btn btn--sm btn--danger" data-act="pedir-apagar-conta" data-id="${c.id}" data-nome="${esc(c.nome)}">${ico('trash')} Apagar</button>`}
+      </div>
+    </div>`;
+}
+
+function ecraConta() {
+  const nova = !estado.contaId;
+  const f = estado.forma || {};
+  const papel = f.papel || 'presidencia';
+
+  return `
+    ${barra('#/contas', nova ? 'Nova conta' : 'Editar conta')}
+    <div class="wrap stack" style="max-width:640px">
+      <form class="stack" id="form-conta">
+        ${nova ? `
+          <label class="label">Utilizador
+            <input class="field" type="text" id="f-utilizador" value="${esc(f.utilizador || '')}"
+                   placeholder="nome.apelido" autocomplete="off" autocapitalize="none">
+          </label>` : `
+          <p class="conta__user mono">@${esc(f.utilizador || '')}</p>`}
+
+        <label class="label">Nome
+          <input class="field" type="text" id="f-nome" value="${esc(f.nome || '')}" placeholder="Como aparece nos avisos">
+        </label>
+
+        <div class="tipo-escolha">
+          <p class="eyebrow">Que pode fazer esta conta</p>
+          <div class="segmented segmented--papeis" role="radiogroup" aria-label="Papel">
+            ${PAPEIS.map((p) => `
+              <button type="button" role="radio" data-act="forma-papel" data-papel="${p.id}"
+                      aria-checked="${papel === p.id}">${esc(p.nome)}</button>`).join('')}
+          </div>
+          <p class="nota">${esc((PAPEIS.find((p) => p.id === papel) || {}).nota || '')}</p>
+        </div>
+
+        ${papel === 'presidencia' ? `
+          <div class="picker">
+            <p class="eyebrow eyebrow--dark">Em que quadros manda</p>
+            <div class="stack" style="gap:10px">
+              ${BOARDS.map((b) => `
+                <button type="button" class="checkrow" role="checkbox"
+                        aria-checked="${(f.quadros || []).includes(b.id)}"
+                        data-act="forma-quadro" data-id="${b.id}">
+                  <span class="check">${ico('check')}</span>
+                  <span>${esc(b.name)}</span>
+                </button>`).join('')}
+            </div>
+          </div>` : ''}
+
+        ${nova ? `
+          <label class="label">Palavra-passe
+            <input class="field" type="text" id="f-palavra" value="${esc(f.palavra || '')}"
+                   placeholder="Pelo menos 8 caracteres" autocomplete="new-password">
+          </label>
+          <p class="nota">Diga-a à pessoa por outro meio. Ela pode mudá-la depois de entrar.</p>` : `
+          <button type="button" class="switch" role="checkbox" aria-checked="${f.ativo !== false}" data-act="forma-ativo">
+            <span>Conta ativa</span>
+            <span class="switch__box">${ico('check')}</span>
+          </button>`}
+
+        <p class="erro" id="erro-conta" role="alert" hidden></p>
+        <button class="btn btn--solid btn--block" type="submit">
+          ${nova ? 'Criar conta' : 'Guardar alterações'}
+        </button>
+      </form>
+    </div>`;
+}
+
+function ecraPalavra() {
+  return `
+    ${barra('#/a-minha-conta', 'Mudar palavra-passe')}
+    <div class="wrap stack" style="max-width:520px">
+      <form class="stack" id="form-palavra">
+        <label class="label">Palavra-passe atual
+          <input class="field" type="password" id="p-atual" autocomplete="current-password">
+        </label>
+        <label class="label">Nova palavra-passe
+          <input class="field" type="password" id="p-nova" autocomplete="new-password"
+                 placeholder="Pelo menos 8 caracteres">
+        </label>
+        <label class="label">Repita a nova
+          <input class="field" type="password" id="p-repete" autocomplete="new-password">
+        </label>
+        <p class="erro" id="erro-palavra" role="alert" hidden></p>
+        <button class="btn btn--solid btn--block" type="submit">Guardar</button>
+      </form>
+    </div>`;
+}
+
 const ECRAS = {
   feed: ecraFeed, boards: ecraQuadros, board: ecraQuadro, post: ecraAviso,
   search: ecraProcurar, login: ecraEntrar, compose: ecraCriar,
-  targets: ecraDestino, mine: ecraConta,
+  targets: ecraDestino, mine: ecraMinhaConta,
+  contas: ecraContas, conta: ecraConta, palavra: ecraPalavra,
   perdido: () => ecraPerdido(estado.perdido)
 };
 
@@ -1086,16 +1289,18 @@ function desenharNav() {
     cartao.dataset.hash = s ? '#/a-minha-conta' : '#/entrar';
     cartao.innerHTML = s
       ? `<span class="rail__username">${esc(s.nome)}</span>
-         <span class="rail__role">${esc(ehAdmin() ? 'Administra todos os quadros' : 'Responsável · ' + nomeQuadro(s.board))}</span>`
+         <span class="rail__role">${esc(s.papelLegivel || s.papelNome || '')}</span>`
       : `<span class="rail__username">Modo de leitura</span>
          <span class="rail__role">Entre para publicar avisos</span>`;
   }
 
   const cta = $('#rail-cta');
   if (cta) {
-    cta.innerHTML = temSessao()
-      ? `<button class="btn btn--solid btn--block btn--compacto" data-act="novo-aviso" data-hash="#/publicar">${ico('plus')} Novo aviso</button>`
-      : `<button class="btn btn--block btn--compacto" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`;
+    cta.innerHTML = !temSessao()
+      ? `<button class="btn btn--block btn--compacto" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`
+      : podePublicar()
+        ? `<button class="btn btn--solid btn--block btn--compacto" data-act="novo-aviso" data-hash="#/publicar">${ico('plus')} Novo aviso</button>`
+        : '';
   }
 }
 
@@ -1128,6 +1333,7 @@ function desenhoDaCamada(c) {
   if (c.tipo === 'foto') return camadaFoto(c);
   if (c.tipo === 'anexo') return camadaAnexo(c);
   if (c.tipo === 'confirmar') return camadaConfirmar(c);
+  if (c.tipo === 'palavra-de-outro') return camadaPalavraDeOutro(c);
   if (c.tipo === 'previsualizar') return camadaPrevisualizar();
   return '';
 }
@@ -1222,6 +1428,22 @@ function camadaAnexo(c) {
           <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
         </div>
         ${corpo}
+      </div>
+    </div>`;
+}
+
+function camadaPalavraDeOutro(c) {
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-p">
+        <p class="dialogo__titulo" id="dlg-p">Nova palavra-passe</p>
+        <p class="dialogo__texto">Para a conta de ${esc(c.nome)}. Diga-lha por outro meio; ela pode mudá-la depois.</p>
+        <input class="field" id="nova-palavra" type="text" data-foco
+               placeholder="Pelo menos 8 caracteres" autocomplete="new-password">
+        <div class="dialogo__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada">Cancelar</button>
+          <button class="btn btn--solid" data-act="guardar-palavra-de-outro" data-id="${esc(c.id)}">Guardar</button>
+        </div>
       </div>
     </div>`;
 }
@@ -1640,9 +1862,9 @@ const ACCOES = {
   },
 
   'modo-bloqueado': () => {
-    aviso(ehAdmin()
+    aviso(ehBispado()
       ? 'Não tem permissão para publicar neste quadro.'
-      : 'Só quem administra todos os quadros pode publicar fora do seu.');
+      : 'Só o bispado pode publicar fora dos seus quadros.');
   },
 
   marcar: (el) => {
@@ -1811,8 +2033,85 @@ const ACCOES = {
     encaminhar();
   },
 
+  /* --- contas --- */
+  'forma-papel': (el) => {
+    estado.forma.papel = el.dataset.papel;
+    if (estado.forma.papel !== 'presidencia') estado.forma.quadros = [];
+    guardarFormaVisivel();
+    desenhar();
+  },
+
+  'forma-quadro': (el) => {
+    const id = el.dataset.id;
+    const q = estado.forma.quadros || (estado.forma.quadros = []);
+    const i = q.indexOf(id);
+    if (i > -1) q.splice(i, 1); else q.push(id);
+    guardarFormaVisivel();
+    desenhar();
+  },
+
+  'forma-ativo': () => {
+    estado.forma.ativo = estado.forma.ativo === false;
+    guardarFormaVisivel();
+    desenhar();
+  },
+
+  'pedir-palavra': (el) => {
+    abrirCamada({
+      tipo: 'palavra-de-outro', id: el.dataset.id, nome: el.dataset.nome
+    });
+  },
+
+  'guardar-palavra-de-outro': async (el) => {
+    const campo = $('#nova-palavra');
+    const valor = campo ? campo.value : '';
+    if (valor.length < 8) { aviso('A palavra-passe tem de ter pelo menos 8 caracteres.'); return; }
+    marcarEnvio(el, true);
+    try {
+      await Arquivo.reporPalavra(el.dataset.id, valor);
+      fecharCamada(true);
+      aviso('Palavra-passe alterada. Diga-lha por outro meio.');
+    } catch (err) {
+      avisoDeErro(err, null);
+    } finally {
+      marcarEnvio(el, false);
+    }
+  },
+
+  'pedir-apagar-conta': (el) => {
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Apagar a conta de ' + el.dataset.nome + '?',
+      texto: 'Deixa de poder entrar. Os avisos que publicou ficam no quadro.',
+      confirmar: 'Apagar', act: 'confirmar-apagar-conta', id: el.dataset.id, perigo: true
+    });
+  },
+
+  'confirmar-apagar-conta': async (el) => {
+    marcarEnvio(el, true);
+    try {
+      await Arquivo.apagarConta(el.dataset.id);
+      estado.contas = (estado.contas || []).filter((c) => String(c.id) !== String(el.dataset.id));
+      fecharCamada(true);
+      desenhar();
+      aviso('Conta apagada.');
+    } catch (err) {
+      avisoDeErro(err, null);
+    } finally {
+      marcarEnvio(el, false);
+    }
+  },
+
   'fechar-aviso': () => limparAviso()
 };
+
+/* Redesenhar o formulário apagaria o que já estava escrito: passa-se
+   primeiro para o estado. */
+function guardarFormaVisivel() {
+  const u = $('#f-utilizador'), n = $('#f-nome'), pw = $('#f-palavra');
+  if (u) estado.forma.utilizador = u.value;
+  if (n) estado.forma.nome = n.value;
+  if (pw) estado.forma.palavra = pw.value;
+}
 
 function actualizarProcura() {
   const lista = $('#results');
@@ -1919,6 +2218,75 @@ document.addEventListener('submit', (ev) => {
       pw.setAttribute('aria-invalid', String(err.codigo === 'autenticacao'));
       pw.focus();
     });
+    return;
+  }
+
+  if (ev.target.id === 'form-conta') {
+    ev.preventDefault();
+    guardarFormaVisivel();
+    const erro = $('#erro-conta');
+    const botao = ev.target.querySelector('button[type="submit"]');
+    const nova = !estado.contaId;
+    const f = estado.forma;
+
+    const falta = [];
+    if (nova && !String(f.utilizador || '').trim()) falta.push('o utilizador');
+    if (!String(f.nome || '').trim()) falta.push('o nome');
+    if (nova && String(f.palavra || '').length < 8) falta.push('uma palavra-passe de 8 caracteres ou mais');
+    if (f.papel === 'presidencia' && !(f.quadros || []).length) falta.push('pelo menos um quadro');
+    if (falta.length) {
+      erro.textContent = 'Falta ' + falta.join(', ') + '.';
+      erro.hidden = false;
+      return;
+    }
+    erro.hidden = true;
+    marcarEnvio(botao, true);
+
+    const corpo = {
+      nome: String(f.nome).trim(),
+      papel: f.papel,
+      quadros: f.papel === 'presidencia' ? f.quadros : []
+    };
+    if (nova) { corpo.utilizador = String(f.utilizador).trim(); corpo.palavra = f.palavra; }
+    else corpo.ativo = f.ativo !== false;
+
+    const promessa = nova
+      ? Arquivo.criarConta(corpo)
+      : Arquivo.editarConta(estado.contaId, corpo);
+
+    promessa.then(() => {
+      estado.contas = null;           // obriga a recarregar a lista
+      estado.forma = {};
+      substituir('#/contas');
+      aviso(nova ? 'Conta criada.' : 'Conta atualizada.');
+    }).catch((err) => {
+      erro.textContent = err.campos
+        ? Object.values(err.campos).join(' ')
+        : err.mensagem;
+      erro.hidden = false;
+    }).finally(() => marcarEnvio(botao, false));
+    return;
+  }
+
+  if (ev.target.id === 'form-palavra') {
+    ev.preventDefault();
+    const atual = $('#p-atual').value, nova = $('#p-nova').value, repete = $('#p-repete').value;
+    const erro = $('#erro-palavra');
+    const botao = ev.target.querySelector('button[type="submit"]');
+
+    if (!atual) { erro.textContent = 'Escreva a palavra-passe atual.'; erro.hidden = false; $('#p-atual').focus(); return; }
+    if (nova.length < 8) { erro.textContent = 'A nova tem de ter pelo menos 8 caracteres.'; erro.hidden = false; $('#p-nova').focus(); return; }
+    if (nova !== repete) { erro.textContent = 'As duas não coincidem.'; erro.hidden = false; $('#p-repete').focus(); return; }
+    erro.hidden = true;
+    marcarEnvio(botao, true);
+
+    Arquivo.mudarPalavra(atual, nova).then(() => {
+      substituir('#/a-minha-conta');
+      aviso('Palavra-passe alterada.');
+    }).catch((err) => {
+      erro.textContent = err.campos ? Object.values(err.campos).join(' ') : err.mensagem;
+      erro.hidden = false;
+    }).finally(() => marcarEnvio(botao, false));
     return;
   }
 

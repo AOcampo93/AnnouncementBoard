@@ -68,7 +68,11 @@ const Arquivo = (function () {
   function naoLidos(lista) { return (lista || avisos()).filter(porLer).length; }
 
   function sessao() { return cache.sessao; }
-  function ehAdmin() { return !!cache.sessao && cache.sessao.papel === 'admin'; }
+  const papel = () => (cache.sessao ? cache.sessao.papel : null);
+  const podeGerirContas = () => !!(cache.sessao && cache.sessao.podeGerirContas);
+  const podePublicar = () => !!(cache.sessao && cache.sessao.podePublicar);
+  /* Mantido para o código que ainda pergunta «é administrador?». */
+  function ehAdmin() { return papel() === 'bispado'; }
 
   function quadrosPermitidos() {
     const s = cache.sessao;
@@ -295,6 +299,13 @@ const Arquivo = (function () {
     avisos: avisos, aviso: aviso, doQuadro: doQuadro,
     porLer: porLer, naoLidos: naoLidos, meus: meus,
     sessao: sessao, ehAdmin: ehAdmin,
+    papel: papel, podeGerirContas: podeGerirContas, podePublicar: podePublicar,
+    contas: () => Api.contas().then((r) => (r && r.utilizadores) || []),
+    criarConta: (d) => Api.criarConta(d),
+    editarConta: (id, p) => Api.editarConta(id, p),
+    reporPalavra: (id, p) => Api.reporPalavra(id, p),
+    apagarConta: (id) => Api.apagarConta(id),
+    mudarPalavra: (a, n) => Api.mudarPalavra(a, n),
     quadrosPermitidos: quadrosPermitidos,
     podeEditar: podeEditar, podeEliminar: podeEliminar,
 
