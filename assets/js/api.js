@@ -197,6 +197,12 @@ const Api = (function () {
       return pedir('POST', '/ficheiros', { formulario: f });
     },
 
+    /* ----- notificações ----- */
+    chaveNotificacoes: () => ler('/notificacoes/chave'),
+    subscreverNotificacoes: (subscricao) => pedir('POST', '/notificacoes/subscrever', { corpo: { subscricao } }),
+    esquecerNotificacoes: (endpoint) => pedir('POST', '/notificacoes/esquecer', { corpo: { endpoint } }),
+    testarNotificacoes: () => pedir('POST', '/notificacoes/testar'),
+
     /* ----- contas (só o bispado) ----- */
     contas: () => ler('/utilizadores'),
     criarConta: (dados) => pedir('POST', '/utilizadores', { corpo: dados }),

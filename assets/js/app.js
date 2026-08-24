@@ -278,6 +278,8 @@ function encaminhar() {
 /* Alguns ecrãs precisam de dados que não estão na cache principal.
    Pedem-se depois de desenhar, para o esqueleto aparecer já. */
 async function prepararEcra() {
+  desenharNotificacoes();
+
   if (estado.ecra === 'contas') {
     if (estado.contas !== null) return;
     try {
@@ -359,10 +361,15 @@ const NAV = [
   { id: 'feed',   etiqueta: 'Novidades',      hash: '#/novidades',     ico: 'feed' },
   { id: 'boards', etiqueta: 'Quadros',        hash: '#/quadros',       ico: 'folder' },
   { id: 'search', etiqueta: 'Procurar',       hash: '#/procurar',      ico: 'search' },
-  { id: 'mine',   etiqueta: 'A minha conta', curto: 'Conta', hash: '#/a-minha-conta', ico: 'user' }
+  { id: 'mine',   etiqueta: 'A minha conta', curto: 'Conta', hash: '#/a-minha-conta', ico: 'user',
+    exigeSessao: true }
 ];
 
-const hashDaNav = (n) => (n.id === 'mine' && !temSessao() ? '#/entrar' : n.hash);
+/* Quem só vem ler não precisa de conta nenhuma: a entrada fica fora do
+   caminho e só aparece a quem já tem sessão. */
+const navVisivel = () => NAV.filter((n) => !n.exigeSessao || temSessao());
+
+const hashDaNav = (n) => n.hash;
 
 /* ---------- Peças reutilizáveis ---------- */
 
@@ -403,9 +410,9 @@ function barra(reserva, titulo, opcoes) {
 }
 
 function botaoCriar(quadroId) {
-  if (!temSessao()) {
-    return `<button class="btn btn--kraft" data-act="ir" data-hash="#/entrar">${ico('user')} Entrar</button>`;
-  }
+  // Sem sessão não se mostra nada: quem vem ler não tem de reparar que
+  // existe uma porta de serviço.
+  if (!temSessao()) return '';
   // Uma conta de leitura não tem onde publicar: mostrar o botão seria
   // prometer uma porta que dá para uma parede.
   if (!podePublicar()) return '';
@@ -457,7 +464,7 @@ function ecraFeed() {
         </p>
       </div>
       <div class="masthead__actions">
-        ${naoLidos > 0 ? `<button class="btn btn--quiet btn--compacto" data-act="ler-tudo">${ico('check')} Marcar tudo como lido</button>` : ''}
+        ${naoLidos > 0 && temSessao() ? `<button class="btn btn--quiet btn--compacto" data-act="ler-tudo">${ico('check')} Marcar tudo como lido</button>` : ''}
         ${botaoCriar(null)}
       </div>
     </div>
@@ -475,6 +482,7 @@ function ecraFeed() {
                 : botaoCriar(null)
             )}
       </div>
+      <div id="caixa-notificacoes"></div>
     </div>`;
 }
 
@@ -503,7 +511,12 @@ function ecraQuadros() {
             </span>
           </button>`;
       }).join('')}
-    </div>`;
+    </div>
+    ${temSessao() ? '' : `
+      <p class="entrada-discreta">
+        É responsável por um quadro?
+        <button data-act="ir" data-hash="#/entrar">Entrar</button>
+      </p>`}`;
 }
 
 function ecraQuadro() {
@@ -994,6 +1007,8 @@ function ecraMinhaConta() {
         ${ico('plus')} Novo aviso
       </button>
 
+      <div id="caixa-notificacoes"></div>
+
       <div class="conta__atalhos">
         ${podeGerirContas() ? `<button class="btn btn--kraft" data-act="ir" data-hash="#/contas">${ico('user')} Gerir contas</button>` : ''}
         <button class="btn btn--quiet" data-act="ir" data-hash="#/palavra-passe">${ico('lock')} Mudar palavra-passe</button>
@@ -1085,6 +1100,67 @@ function ecraErroRede(err) {
     </div>`;
 }
 
+
+/* ---------- Notificações ---------- */
+
+/* O estado só se sabe perguntando ao navegador, que é assíncrono: por
+   isso o bloco desenha-se depois, sobre um espaço já reservado. */
+async function desenharNotificacoes() {
+  const caixa = $('#caixa-notificacoes');
+  if (!caixa || typeof PWA === 'undefined') return;
+
+  let e;
+  try { e = await PWA.notificacoes.estado(); } catch (err) { return; }
+  if (!e.suportado) { caixa.innerHTML = ''; return; }
+
+  if (e.subscrito) {
+    caixa.innerHTML = `
+      <div class="notif notif--ligada">
+        <span class="notif__ico">${ico('bell')}</span>
+        <span class="notif__texto">
+          <span class="notif__titulo">Vai ser avisado dos avisos novos</span>
+          <span class="notif__nota">Neste aparelho, mesmo com a aplicação fechada.</span>
+        </span>
+        <button class="btn btn--sm btn--quiet" data-act="notif-desativar">Desligar</button>
+      </div>`;
+    return;
+  }
+
+  if (e.permissao === 'denied') {
+    caixa.innerHTML = `
+      <div class="notif">
+        <span class="notif__ico">${ico('bell-off')}</span>
+        <span class="notif__texto">
+          <span class="notif__titulo">Notificações bloqueadas</span>
+          <span class="notif__nota">Estão desligadas nas definições do navegador para este sítio.</span>
+        </span>
+      </div>`;
+    return;
+  }
+
+  if (e.exigeInstalar) {
+    caixa.innerHTML = `
+      <div class="notif">
+        <span class="notif__ico">${ico('bell')}</span>
+        <span class="notif__texto">
+          <span class="notif__titulo">Quer ser avisado dos avisos novos?</span>
+          <span class="notif__nota">No iPhone é preciso primeiro pôr o Quadro no ecrã inicial.</span>
+        </span>
+        <button class="btn btn--sm btn--kraft" data-act="convidar-instalar">Como se faz</button>
+      </div>`;
+    return;
+  }
+
+  caixa.innerHTML = `
+    <div class="notif">
+      <span class="notif__ico">${ico('bell')}</span>
+      <span class="notif__texto">
+        <span class="notif__titulo">Quer ser avisado dos avisos novos?</span>
+        <span class="notif__nota">Chega uma notificação a este aparelho quando alguém publicar.</span>
+      </span>
+      <button class="btn btn--sm btn--solid" data-act="notif-ativar">Ativar</button>
+    </div>`;
+}
 
 /* ---------- Contas (só o bispado) ---------- */
 
@@ -1262,6 +1338,14 @@ function listaDeQuadros() {
 }
 
 function desenharNav() {
+  // A barra ganha ou perde o lugar da conta consoante haja sessão.
+  const esperados = navVisivel().length;
+  if ($('#tabbar').children.length !== esperados) {
+    $('#tabbar').innerHTML      = itensDeNav('tabbar__item', true);
+    $('#toprail-nav').innerHTML = itensDeNav('toprail__item');
+    $('#rail-nav').innerHTML    = itensDeNav('rail__item');
+  }
+
   // Os quadros chegam da API depois do arranque: reconstrói-se a lista
   // quando o que está desenhado já não corresponde ao que há.
   const caixa = $('#rail-boards');
@@ -2033,6 +2117,35 @@ const ACCOES = {
     encaminhar();
   },
 
+  /* --- notificações --- */
+  'notif-ativar': async (el) => {
+    marcarEnvio(el, true);
+    try {
+      await PWA.notificacoes.ativar();
+      aviso('Pronto. Vai ser avisado quando alguém publicar.');
+    } catch (err) {
+      aviso(err.mensagem || err.message);
+    } finally {
+      marcarEnvio(el, false);
+      desenharNotificacoes();
+    }
+  },
+
+  'notif-desativar': async (el) => {
+    marcarEnvio(el, true);
+    try {
+      await PWA.notificacoes.desativar();
+      aviso('Deixou de receber notificações neste aparelho.');
+    } catch (err) {
+      aviso(err.mensagem || err.message);
+    } finally {
+      marcarEnvio(el, false);
+      desenharNotificacoes();
+    }
+  },
+
+  'convidar-instalar': () => { if (typeof PWA !== 'undefined') PWA.convidar(); },
+
   /* --- contas --- */
   'forma-papel': (el) => {
     estado.forma.papel = el.dataset.papel;
@@ -2328,15 +2441,17 @@ document.addEventListener('keydown', (ev) => {
 
 /* ---------- Arranque ---------- */
 
-function montarEstrutura() {
-  const itens = (cls, curto) => NAV.map((n) => `
+function itensDeNav(cls, curto) {
+  return navVisivel().map((n) => `
     <button class="${cls}" data-nav="${n.id}" data-act="ir" data-hash="${n.hash}">
       ${ico(n.ico)}<span>${curto && n.curto ? n.curto : n.etiqueta}</span>
     </button>`).join('');
+}
 
-  $('#tabbar').innerHTML      = itens('tabbar__item', true);
-  $('#toprail-nav').innerHTML = itens('toprail__item');
-  $('#rail-nav').innerHTML    = itens('rail__item');
+function montarEstrutura() {
+  $('#tabbar').innerHTML      = itensDeNav('tabbar__item', true);
+  $('#toprail-nav').innerHTML = itensDeNav('toprail__item');
+  $('#rail-nav').innerHTML    = itensDeNav('rail__item');
 
   $('#rail-boards').innerHTML = listaDeQuadros();
 }

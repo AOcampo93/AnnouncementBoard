@@ -1434,3 +1434,105 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 .segmented--papeis button{font-size:15px;min-height:54px}
 
 .dialogo .field{width:100%}
+
+/* A entrada para responsáveis vive no fim dos quadros, em voz baixa:
+   quem vem ler não precisa de conta e não deve tropeçar nela. */
+.entrada-discreta{
+  padding:8px var(--pad) 34px;
+  font:400 16px/1.5 var(--sans);
+  color:var(--mute-2);
+  text-align:center;
+}
+.entrada-discreta button{
+  font:600 16px var(--sans);
+  color:var(--ink-3);
+  text-decoration:underline;
+  text-underline-offset:3px;
+  padding:8px 6px;
+  border-radius:var(--r);
+}
+.entrada-discreta button:hover{color:var(--ink);background:rgba(31,27,22,.07)}
+
+@media (min-width:1120px){
+  .entrada-discreta{text-align:left}
+}
+
+/* ============================================================
+   PARTE 5 — aplicação instalável
+   ============================================================ */
+
+/* O convite entra por baixo, acima da barra de separadores, e sai da
+   mesma maneira. Nunca tapa a navegação. */
+.convite{
+  position:fixed;z-index:55;
+  left:12px;right:12px;
+  bottom:calc(100px + env(safe-area-inset-bottom));
+  display:grid;
+  grid-template-columns:auto 1fr;
+  grid-template-areas:"icone texto" "accoes accoes";
+  gap:14px;
+  padding:16px 44px 16px 16px;
+  background:var(--paper);
+  border:var(--b3);border-radius:var(--r-lg);
+  box-shadow:var(--sh-4);
+  transform:translateY(16px);
+  opacity:0;
+  transition:transform .22s ease,opacity .22s ease;
+}
+.convite--visivel{transform:none;opacity:1}
+
+.convite__icone{
+  grid-area:icone;
+  width:56px;height:56px;
+  border:var(--b);border-radius:12px;
+}
+.convite__texto{grid-area:texto;display:flex;flex-direction:column;gap:4px;min-width:0}
+.convite__titulo{font:700 18px/1.25 var(--sans);text-wrap:pretty}
+.convite__nota{font:400 15px/1.4 var(--sans);color:var(--mute);text-wrap:pretty}
+.convite__nota strong{color:var(--ink-3);font-weight:700}
+
+.convite__accoes{grid-area:accoes;display:flex;flex-wrap:wrap;gap:10px}
+.convite__accoes .btn{flex:1 1 auto;min-height:46px;white-space:nowrap}
+
+.convite__fechar{
+  position:absolute;top:8px;right:8px;
+  display:flex;align-items:center;justify-content:center;
+  width:36px;height:36px;border-radius:var(--r);color:var(--mute-2);
+}
+.convite__fechar:hover{background:rgba(31,27,22,.09);color:var(--ink)}
+.convite__fechar .ico{width:18px;height:18px}
+
+@media (min-width:768px){
+  .convite{
+    left:auto;right:32px;bottom:32px;width:400px;
+    grid-template-areas:"icone texto" "accoes accoes";
+  }
+}
+
+@media (prefers-reduced-motion:reduce){
+  .convite{transition:none;transform:none;opacity:1}
+}
+
+/* Convite a ser avisado. Discreto: fica no fim da lista, não pede nada
+   à entrada, e desaparece assim que a resposta for dada. */
+.notif{
+  display:flex;align-items:center;flex-wrap:wrap;gap:14px;
+  margin-top:24px;padding:16px;
+  background:var(--kraft);
+  border:2px dashed var(--pencil);border-radius:var(--r-lg);
+}
+.notif--ligada{background:var(--sticky);border:var(--b);border-style:solid}
+.notif__ico{
+  display:flex;align-items:center;justify-content:center;
+  width:46px;height:46px;flex:0 0 46px;
+  background:var(--paper);border:var(--b);border-radius:50%;
+}
+.notif__ico .ico{width:24px;height:24px}
+.notif__texto{display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px}
+.notif__titulo{font:700 17px/1.3 var(--sans);text-wrap:pretty}
+.notif__nota{font:400 15px/1.4 var(--sans);color:var(--mute);text-wrap:pretty}
+.notif .btn{flex:0 0 auto}
+
+@media (min-width:1120px){
+  .notif{max-width:640px}
+}
