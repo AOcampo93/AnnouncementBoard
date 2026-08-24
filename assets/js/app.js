@@ -1446,6 +1446,14 @@ async function receberFicheiros(chave, ficheiros) {
 /* Enquanto um pedido está em voo o botão diz-no e não aceita segundo clique. */
 function marcarEnvio(el, aEnviar) {
   estado.aEnviar = !!aEnviar;
+  if (!aEnviar) {
+    // O ecrã pode ter mudado entretanto: limpa-se o estado onde quer que tenha ficado.
+    $$('.btn--aEnviar').forEach((b) => {
+      b.classList.remove('btn--aEnviar');
+      b.removeAttribute('aria-busy');
+      if (b.tagName === 'BUTTON') b.disabled = false;
+    });
+  }
   if (!el || !el.classList) return;
   el.classList.toggle('btn--aEnviar', !!aEnviar);
   if (aEnviar) el.setAttribute('aria-busy', 'true'); else el.removeAttribute('aria-busy');
@@ -1673,9 +1681,10 @@ const ACCOES = {
         aviso('Publicado em ' + alvos.map(nomeQuadro).join(', ') + '.');
       }
     } catch (err) {
-      marcarEnvio(el, false);
       if (err.campos) mostrarCamposComErro(err.campos);
       avisoDeErro(err, 'publicar');
+    } finally {
+      marcarEnvio(el, false);
     }
   },
 
@@ -1702,8 +1711,9 @@ const ACCOES = {
       if (noProprio) substituir('#/a-minha-conta');
       aviso('«' + r.aviso.title + '» eliminado.', { etiqueta: 'Anular', act: 'anular-eliminar' });
     } catch (err) {
-      marcarEnvio(el, false);
       avisoDeErro(err, null);
+    } finally {
+      marcarEnvio(el, false);
     }
   },
 

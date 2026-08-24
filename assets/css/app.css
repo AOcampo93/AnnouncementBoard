@@ -1358,11 +1358,39 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 
 /* ---------- Escolha do tipo de aviso ---------- */
 
+/* Quatro opções não cabem numa fila em ecrã estreito. Em vez de deixar
+   a barra segmentada partir-se ao meio — com os contornos a meio gás e
+   sem risco entre as filas — viram fichas independentes, duas a duas. */
 .tipo-escolha{display:flex;flex-direction:column;gap:10px}
-.tipo-escolha .segmented{flex-wrap:wrap}
-.tipo-escolha .segmented button{min-width:0;flex:1 1 44%}
-.segmented button[aria-checked="true"]{background:var(--ink);color:var(--paper);font-weight:700}
+
+.tipo-escolha .segmented{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+  border:0;
+  border-radius:0;
+  overflow:visible;
+}
+.tipo-escolha .segmented button{
+  min-height:58px;
+  padding:10px 12px;
+  background:var(--card);
+  border:var(--b);
+  border-radius:var(--r);
+  box-shadow:var(--sh-1);
+  font:600 17px/1.2 var(--sans);
+  transition:transform .12s ease,background .12s ease;
+}
+.tipo-escolha .segmented button:hover{transform:translate(-1px,-1px)}
+.tipo-escolha .segmented button:active{transform:translate(1px,1px);box-shadow:none}
+.tipo-escolha .segmented button[aria-checked="true"]{
+  background:var(--sticky);
+  color:var(--ink);
+  border:var(--b3);
+  box-shadow:var(--sh-2);
+  font-weight:700;
+}
 
 @media (min-width:768px){
-  .tipo-escolha .segmented button{flex:1 1 0}
+  .tipo-escolha .segmented{grid-template-columns:repeat(4,1fr)}
 }
