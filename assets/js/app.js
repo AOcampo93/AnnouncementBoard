@@ -466,7 +466,7 @@ function ecraFeed() {
         </p>
       </div>
       <div class="masthead__actions">
-        ${naoLidos > 0 && temSessao() ? `<button class="btn btn--quiet btn--compacto" data-act="ler-tudo">${ico('check')} Marcar tudo como lido</button>` : ''}
+        ${naoLidos > 0 ? `<button class="btn btn--quiet btn--compacto" data-act="ler-tudo">${ico('check')} Marcar tudo como lido</button>` : ''}
         ${botaoCriar(null)}
       </div>
     </div>

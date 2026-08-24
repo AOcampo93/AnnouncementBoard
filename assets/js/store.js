@@ -16,6 +16,30 @@ const Arquivo = (function () {
   };
 
   const rede = { aCarregar: false, prontos: false, erro: null };
+
+  /* Quem lê sem conta também merece ver desaparecer o selo NOVO. Como
+     não há a quem o dizer no servidor, a marca fica neste aparelho.
+     É uma preferência de leitura, não dados da aplicação. */
+  const CHAVE_LIDOS = 'quadro-avisos.lidos';
+  const LIMITE_LIDOS = 500;
+
+  const lidosLocais = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(CHAVE_LIDOS) || '[]')); }
+    catch (err) { return new Set(); }
+  })();
+
+  function gravarLidosLocais() {
+    try {
+      // Sem limite a lista cresceria para sempre; os mais antigos caem.
+      const todos = [...lidosLocais];
+      const guardar = todos.slice(-LIMITE_LIDOS);
+      if (guardar.length !== todos.length) {
+        lidosLocais.clear();
+        guardar.forEach((id) => lidosLocais.add(id));
+      }
+      localStorage.setItem(CHAVE_LIDOS, JSON.stringify(guardar));
+    } catch (err) { /* sem guarda: vale só enquanto a página estiver aberta */ }
+  }
   const ouvintes = [];
 
   const notificar = () => ouvintes.forEach((fn) => { try { fn(); } catch (e) { /* ouvinte seu problema */ } });
@@ -64,8 +88,12 @@ const Arquivo = (function () {
   function aviso(id) { return cache.avisos.find((p) => p.id === id) || null; }
   function doQuadro(id) { return avisos().filter((p) => p.boards.indexOf(id) > -1); }
 
-  /* Quem já leu o quê é do servidor: vem marcado em cada aviso. */
-  function porLer(p) { return !!p && p.porLer === true; }
+  /* Com sessão manda o servidor; sem ela, a marca deste aparelho. */
+  function porLer(p) {
+    if (!p || p.porLer !== true) return false;
+    if (cache.sessao) return true;
+    return !lidosLocais.has(p.id);
+  }
   function naoLidos(lista) { return (lista || avisos()).filter(porLer).length; }
 
   function sessao() { return cache.sessao; }
@@ -251,7 +279,16 @@ const Arquivo = (function () {
   /* Marcar como lido não vale um aviso de erro: falha em silêncio. */
   async function marcarLido(id) {
     const p = aviso(id);
-    if (!p || !p.porLer) return false;
+    if (!p || !porLer(p)) return false;
+
+    // Sem sessão não há a quem dizer: fica marcado aqui e chega.
+    if (!cache.sessao) {
+      lidosLocais.add(id);
+      gravarLidosLocais();
+      notificar();
+      return true;
+    }
+
     p.porLer = false;
     notificar();
     try { await Api.marcarLido(id); } catch (err) { p.porLer = true; notificar(); }
@@ -259,8 +296,16 @@ const Arquivo = (function () {
   }
 
   async function marcarTudoLido() {
-    const antes = cache.avisos.filter((p) => p.porLer);
+    const antes = cache.avisos.filter(porLer);
     if (!antes.length) return 0;
+
+    if (!cache.sessao) {
+      antes.forEach((p) => lidosLocais.add(p.id));
+      gravarLidosLocais();
+      notificar();
+      return antes.length;
+    }
+
     antes.forEach((p) => { p.porLer = false; });
     notificar();
     try {
@@ -305,6 +350,7 @@ const Arquivo = (function () {
 
     avisos: avisos, aviso: aviso, doQuadro: doQuadro,
     porLer: porLer, naoLidos: naoLidos, meus: meus,
+    esquecerLidosLocais: () => { lidosLocais.clear(); gravarLidosLocais(); notificar(); },
     sessao: sessao, ehAdmin: ehAdmin,
     papel: papel, podeGerirContas: podeGerirContas, podePublicar: podePublicar,
     lugares: () => cache.lugares.slice(),
