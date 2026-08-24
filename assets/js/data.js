@@ -19,10 +19,10 @@ const BLOCKS = {
   galeria:  { label: 'Galeria de fotos',     hint: 'Toque para carregar as fotos',         kind: 'media', campo: 'ficheiros', accept: 'image/*' },
   texto:    { label: 'Descrição',            hint: 'Conte os detalhes: dia, hora, local…', kind: 'text',  campo: 'area' },
   data:     { label: 'Data e hora',          hint: '',                                     kind: 'text',  campo: 'datahora' },
-  local:    { label: 'Local ou morada',      hint: 'Capela da ala · Rua de Tomar 45',      kind: 'text',  campo: 'texto',     max: 120 },
+  local:    { label: 'Onde é',               hint: 'Capela da ala · Rua de Tomar 45',      kind: 'text',  campo: 'lugar' },
   ligacao:  { label: 'Ligação',              hint: 'https://…',                            kind: 'text',  campo: 'url' },
   pdf:      { label: 'Ficheiro PDF',         hint: 'Toque para escolher o ficheiro',       kind: 'media', campo: 'ficheiro',  accept: 'application/pdf' },
-  contacto: { label: 'Telefone de contacto', hint: '912 402 788',                          kind: 'text',  campo: 'telefone' }
+  contacto: { label: 'Quem responde a dúvidas', hint: '912 402 788',                       kind: 'text',  campo: 'contacto' }
 };
 
 /* Ordem por que as partes aparecem na paleta e no aviso publicado. */

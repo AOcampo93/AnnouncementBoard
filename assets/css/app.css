@@ -1536,3 +1536,88 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 @media (min-width:1120px){
   .notif{max-width:640px}
 }
+
+/* Quem responde a dúvidas nem sempre é quem publica: o nome é um campo
+   próprio, com um atalho para o caso em que coincidem. */
+.contacto-campo{display:flex;flex-direction:column;gap:12px}
+.contacto-campo .btn{align-self:flex-start}
+
+/* ============================================================
+   PARTE 6 — lugares e mapas
+   ============================================================ */
+
+.lugar-escolher{display:flex;flex-direction:column;gap:12px}
+.lugar-escolher__ou{display:flex;flex-wrap:wrap;gap:10px}
+.lugar-escolher__ou .btn{flex:1 1 auto;white-space:nowrap}
+
+.lugar-escolhido{
+  display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  padding:12px;
+  background:var(--paper);border:2px solid var(--rule);border-radius:var(--r);
+}
+.lugar-escolhido__texto{display:flex;flex-direction:column;gap:3px;flex:1;min-width:150px}
+.lugar-escolhido__titulo{font:700 18px/1.25 var(--sans)}
+.lugar-escolhido__morada{font:400 15px/1.4 var(--sans);color:var(--mute)}
+.lugar-escolhido__nota{font:700 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute-3)}
+
+/* O mapa é uma janela recortada no papel: mesmo contorno, mesma sombra. */
+.mapa-vivo{
+  height:200px;
+  border:var(--b);border-radius:var(--r);
+  background:#e8e2d2;
+  overflow:hidden;
+  display:flex;align-items:center;justify-content:center;
+  font:400 15px var(--mono);color:var(--mute-2);
+}
+.mapa-vivo--pequeno{width:120px;height:100px;flex:0 0 120px}
+.mapa-vivo--visor{height:240px;box-shadow:var(--sh-1)}
+.mapa-vivo--falhou{background:repeating-linear-gradient(45deg,#efe6d0 0 8px,#e3d6ba 8px 16px)}
+
+/* O alfinete fica quieto no centro e o mapa move-se por baixo: com o
+   dedo é muito mais fácil de acertar do que arrastar um alfinete. */
+.mapa-palco{position:relative}
+.mapa-palco .mapa-vivo{height:300px}
+.mapa-alfinete{
+  position:absolute;left:50%;top:50%;
+  transform:translate(-50%,-100%);
+  display:flex;align-items:center;justify-content:center;
+  width:46px;height:46px;
+  background:var(--stamp);color:var(--paper);
+  border:var(--b);border-radius:50%;
+  box-shadow:var(--sh-2);
+  pointer-events:none;
+  z-index:500;
+}
+.mapa-alfinete .ico{width:24px;height:24px}
+
+.visor__titulo-lugar{font:700 22px/1.25 var(--sans);text-wrap:pretty}
+
+/* O Leaflet traz os seus próprios tipos de letra e cores: alinha-se
+   com o resto sem lhe tocar por dentro. */
+.mapa-vivo .leaflet-container{font-family:var(--sans);background:#e8e2d2}
+.mapa-vivo .leaflet-control-attribution{
+  background:rgba(250,246,236,.86);
+  font:400 10px var(--sans);color:var(--mute-2);
+}
+.mapa-vivo .leaflet-control-zoom a{
+  border:var(--b);color:var(--ink);background:var(--paper);
+  font-weight:700;
+}
+
+.lugar-novo{display:flex;flex-wrap:wrap;gap:12px}
+.lugar-novo .btn{flex:1 1 auto;white-space:nowrap}
+
+.lugar-ficha{
+  display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  padding:14px;
+  background:var(--card);border:var(--b);border-radius:var(--r);
+  box-shadow:var(--sh-2);
+}
+.lugar-ficha__texto{display:flex;flex-direction:column;gap:3px;flex:1;min-width:150px}
+.lugar-ficha__semmapa{
+  display:flex;align-items:center;justify-content:center;
+  width:120px;height:100px;flex:0 0 120px;
+  background:var(--kraft);border:2px dashed var(--pencil);border-radius:var(--r);
+  color:var(--mute-3);
+}
+.lugar-ficha__semmapa .ico{width:28px;height:28px}

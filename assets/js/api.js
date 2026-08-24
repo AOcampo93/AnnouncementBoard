@@ -197,6 +197,12 @@ const Api = (function () {
       return pedir('POST', '/ficheiros', { formulario: f });
     },
 
+    /* ----- lugares ----- */
+    lugares: () => ler('/lugares'),
+    criarLugar: (d) => pedir('POST', '/lugares', { corpo: d }),
+    editarLugar: (id, d) => pedir('PATCH', '/lugares/' + id, { corpo: d }),
+    apagarLugar: (id) => pedir('DELETE', '/lugares/' + id),
+
     /* ----- notificações ----- */
     chaveNotificacoes: () => ler('/notificacoes/chave'),
     subscreverNotificacoes: (subscricao) => pedir('POST', '/notificacoes/subscrever', { corpo: { subscricao } }),

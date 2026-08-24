@@ -137,10 +137,11 @@ const ROTAS = [
   { re: /^\/palavra-passe$/,         ecra: 'palavra' },
   { re: /^\/contas$/,                ecra: 'contas' },
   { re: /^\/contas\/nova$/,          ecra: 'conta' },
-  { re: /^\/contas\/(\d+)$/,         ecra: 'conta', chave: 'contaId' }
+  { re: /^\/contas\/(\d+)$/,         ecra: 'conta', chave: 'contaId' },
+  { re: /^\/lugares$/,               ecra: 'lugares' }
 ];
 
-const PRIVADAS = ['compose', 'targets', 'mine', 'palavra', 'contas', 'conta'];
+const PRIVADAS = ['compose', 'targets', 'mine', 'palavra', 'contas', 'conta', 'lugares'];
 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
@@ -230,7 +231,7 @@ function encaminhar() {
     return;
   }
   // Gerir contas é exclusivo do bispado.
-  if ((ecra === 'contas' || ecra === 'conta') && temSessao() && !podeGerirContas()) {
+  if ((ecra === 'contas' || ecra === 'conta' || ecra === 'lugares') && temSessao() && !podeGerirContas()) {
     substituir('#/a-minha-conta');
     aviso('Só o bispado pode gerir contas.');
     return;
@@ -263,7 +264,7 @@ function encaminhar() {
   const mapa = {
     feed: 'feed', boards: 'boards', board: 'boards', search: 'search',
     login: 'mine', compose: 'mine', targets: 'mine', mine: 'mine',
-    palavra: 'mine', contas: 'mine', conta: 'mine'
+    palavra: 'mine', contas: 'mine', conta: 'mine', lugares: 'mine'
   };
   if (mapa[ecra]) estado.seccao = mapa[ecra];
 
@@ -279,6 +280,7 @@ function encaminhar() {
    Pedem-se depois de desenhar, para o esqueleto aparecer já. */
 async function prepararEcra() {
   desenharNotificacoes();
+  activarMapas();
 
   if (estado.ecra === 'contas') {
     if (estado.contas !== null) return;
@@ -795,6 +797,73 @@ function campoDoBloco(chave) {
     return `<input class="field" id="${idc}" type="tel" inputmode="tel" data-campo="${chave}"
                    value="${esc(v || '')}" placeholder="${esc(b.hint)}">`;
   }
+  if (b.campo === 'lugar') {
+    const escolhido = v && (v.titulo || v.morada) ? v : null;
+    const guardados = Arquivo.lugares();
+
+    if (escolhido) {
+      return `
+        <div class="lugar-escolhido">
+          ${escolhido.lat != null && escolhido.lon != null
+            ? `<div class="mapa-vivo mapa-vivo--pequeno" data-mapa-ver="${escolhido.lat},${escolhido.lon}"></div>`
+            : ''}
+          <div class="lugar-escolhido__texto">
+            <span class="lugar-escolhido__titulo">${esc(escolhido.titulo || 'Sem nome')}</span>
+            ${escolhido.morada ? `<span class="lugar-escolhido__morada">${esc(escolhido.morada)}</span>` : ''}
+            ${escolhido.lat != null ? '<span class="lugar-escolhido__nota">Marcado no mapa</span>' : ''}
+          </div>
+          <button type="button" class="btn btn--sm btn--quiet" data-act="lugar-trocar" data-chave="${chave}">Trocar</button>
+        </div>`;
+    }
+
+    return `
+      <div class="lugar-escolher">
+        ${guardados.length ? `
+          <p class="eyebrow">Lugares habituais</p>
+          <div class="chips">
+            ${guardados.map((l) => `
+              <button type="button" class="chip chip--sm" data-act="lugar-guardado" data-id="${l.id}" data-chave="${chave}">
+                ${ico('map')} ${esc(l.titulo)}
+              </button>`).join('')}
+          </div>` : ''}
+        <div class="lugar-escolher__ou">
+          <button type="button" class="btn btn--sm btn--kraft" data-act="lugar-escrever" data-chave="${chave}">
+            ${ico('edit')} Escrever a morada
+          </button>
+          <button type="button" class="btn btn--sm btn--kraft" data-act="lugar-mapa" data-chave="${chave}">
+            ${ico('map')} Marcar no mapa
+          </button>
+        </div>
+      </div>`;
+  }
+
+  if (b.campo === 'contacto') {
+    /* Quem publica nem sempre é quem atende o telefone: por isso o nome
+       é um campo à parte, com um atalho para o caso comum. */
+    const c = v || {};
+    const s = sessao();
+    const souEu = s && c.nome === s.nome;
+    return `
+      <div class="contacto-campo">
+        <label class="label">Nome de quem responde
+          <input class="field" id="${idc}" type="text" data-campo-sub="${chave}:nome"
+                 value="${esc(c.nome || '')}" placeholder="Irmã Laura Mendes">
+        </label>
+        ${s ? `
+          <button type="button" class="btn btn--sm ${souEu ? 'btn--kraft' : 'btn--quiet'}"
+                  data-act="contacto-sou-eu" data-chave="${chave}">
+            ${souEu ? ico('check') : ico('user')} Sou eu
+          </button>` : ''}
+        <label class="label">Telefone
+          <input class="field" type="tel" inputmode="tel" data-campo-sub="${chave}:telefone"
+                 value="${esc(c.telefone || '')}" placeholder="${esc(b.hint)}">
+        </label>
+        <label class="label">Quando ou como (opcional)
+          <input class="field" type="text" data-campo-sub="${chave}:nota"
+                 value="${esc(c.nota || '')}" placeholder="Também no domingo, na capela">
+        </label>
+      </div>`;
+  }
   if (b.campo === 'ficheiro') {
     const ehPdf = b.accept === 'application/pdf';
     if (v) {
@@ -1011,6 +1080,7 @@ function ecraMinhaConta() {
 
       <div class="conta__atalhos">
         ${podeGerirContas() ? `<button class="btn btn--kraft" data-act="ir" data-hash="#/contas">${ico('user')} Gerir contas</button>` : ''}
+        ${podeGerirContas() ? `<button class="btn btn--kraft" data-act="ir" data-hash="#/lugares">${ico('map')} Lugares</button>` : ''}
         <button class="btn btn--quiet" data-act="ir" data-hash="#/palavra-passe">${ico('lock')} Mudar palavra-passe</button>
       </div>
 
@@ -1101,6 +1171,99 @@ function ecraErroRede(err) {
 }
 
 
+/* ---------- Mapa ---------- */
+
+/* O Leaflet são 150 KB: só se carrega quando alguém abre um mapa, e
+   uma só vez por sessão. */
+let mapaAPedir = null;
+function carregarMapa() {
+  if (window.L) return Promise.resolve(window.L);
+  if (mapaAPedir) return mapaAPedir;
+
+  mapaAPedir = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'assets/vendor/leaflet.css';
+    document.head.appendChild(css);
+
+    const js = document.createElement('script');
+    js.src = 'assets/vendor/leaflet.js';
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { mapaAPedir = null; reject(new Error('Não foi possível carregar o mapa.')); };
+    document.head.appendChild(js);
+  });
+  return mapaAPedir;
+}
+
+/* Leiria, para quando não há nada melhor por onde começar. */
+const CENTRO_POR_OMISSAO = [39.7436, -8.8071];
+
+function centroInicial(lugar) {
+  if (lugar && lugar.lat != null && lugar.lon != null) return [lugar.lat, lugar.lon];
+  const comCoordenadas = Arquivo.lugares().find((l) => l.lat != null && l.lon != null);
+  if (comCoordenadas) return [comCoordenadas.lat, comCoordenadas.lon];
+  return CENTRO_POR_OMISSAO;
+}
+
+const ATRIBUICAO = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
+
+/* Mapa só de ver: sem arrastar, sem zoom, sem teclado. */
+async function mapaEstatico(elemento, lat, lon) {
+  const L = await carregarMapa();
+  const m = L.map(elemento, {
+    center: [lat, lon], zoom: 16,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false,
+    boxZoom: false, keyboard: false, touchZoom: false,
+    zoomControl: false, attributionControl: true
+  });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: ATRIBUICAO
+  }).addTo(m);
+  return m;
+}
+
+/* Mapa para escolher: o alfinete não se move, move-se o mapa por baixo.
+   É mais fácil de acertar com o dedo do que arrastar um alfinete. */
+async function mapaEscolhavel(elemento, centro, aoMover) {
+  const L = await carregarMapa();
+  const m = L.map(elemento, {
+    center: centro, zoom: 16, zoomControl: true, attributionControl: true
+  });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: ATRIBUICAO
+  }).addTo(m);
+  m.on('moveend', () => { const c = m.getCenter(); aoMover(c.lat, c.lng); });
+  setTimeout(() => m.invalidateSize(), 60);
+  return m;
+}
+
+/* Os mapas só existem depois de o HTML estar no ecrã. */
+async function activarMapas() {
+  for (const el of $$('[data-mapa-ver]')) {
+    if (el.dataset.mapaPronto) continue;
+    el.dataset.mapaPronto = '1';
+    const [lat, lon] = el.dataset.mapaVer.split(',').map(Number);
+    try { await mapaEstatico(el, lat, lon); }
+    catch (err) { el.classList.add('mapa-vivo--falhou'); el.textContent = 'Mapa indisponível'; }
+  }
+
+  const escolher = $('#mapa-escolher');
+  if (escolher && !escolher.dataset.mapaPronto) {
+    escolher.dataset.mapaPronto = '1';
+    const c = estado.camada;
+    try {
+      const centro = centroInicial(c && c.valor);
+      c.lat = centro[0]; c.lon = centro[1];
+      await mapaEscolhavel(escolher, centro, (lat, lon) => {
+        if (estado.camada) { estado.camada.lat = lat; estado.camada.lon = lon; }
+      });
+    } catch (err) {
+      escolher.classList.add('mapa-vivo--falhou');
+      escolher.textContent = 'Não foi possível carregar o mapa.';
+    }
+  }
+}
+
 /* ---------- Notificações ---------- */
 
 /* O estado só se sabe perguntando ao navegador, que é assíncrono: por
@@ -1159,6 +1322,41 @@ async function desenharNotificacoes() {
         <span class="notif__nota">Chega uma notificação a este aparelho quando alguém publicar.</span>
       </span>
       <button class="btn btn--sm btn--solid" data-act="notif-ativar">Ativar</button>
+    </div>`;
+}
+
+/* ---------- Lugares guardados ---------- */
+
+function ecraLugares() {
+  const lista = Arquivo.lugares();
+
+  return `
+    ${barra('#/a-minha-conta', 'Lugares')}
+    <div class="wrap stack">
+      <p class="lede">Os sítios que se repetem nos avisos. Quem escreve um aviso escolhe-os com um toque, em vez de escrever a morada outra vez.</p>
+
+      <div class="lugar-novo">
+        <button class="btn btn--kraft" data-act="lugar-novo-escrito">${ico('edit')} Novo, escrito à mão</button>
+        <button class="btn btn--solid" data-act="lugar-novo-mapa">${ico('map')} Novo, marcado no mapa</button>
+      </div>
+
+      ${lista.length ? `
+        <div class="mine-grid stack">
+          ${lista.map((l) => `
+            <div class="lugar-ficha">
+              ${l.lat != null && l.lon != null
+                ? `<div class="mapa-vivo mapa-vivo--pequeno" data-mapa-ver="${l.lat},${l.lon}"></div>`
+                : `<span class="lugar-ficha__semmapa">${ico('map')}</span>`}
+              <div class="lugar-ficha__texto">
+                <span class="lugar-escolhido__titulo">${esc(l.titulo)}</span>
+                ${l.morada ? `<span class="lugar-escolhido__morada">${esc(l.morada)}</span>` : '<span class="lugar-escolhido__nota">Sem morada</span>'}
+              </div>
+              <button class="btn btn--sm btn--danger" data-act="pedir-apagar-lugar" data-id="${l.id}" data-titulo="${esc(l.titulo)}">
+                ${ico('trash')} Apagar
+              </button>
+            </div>`).join('')}
+        </div>`
+        : vazio('Ainda não há lugares guardados. Guarde a capela para começar.')}
     </div>`;
 }
 
@@ -1301,7 +1499,7 @@ const ECRAS = {
   feed: ecraFeed, boards: ecraQuadros, board: ecraQuadro, post: ecraAviso,
   search: ecraProcurar, login: ecraEntrar, compose: ecraCriar,
   targets: ecraDestino, mine: ecraMinhaConta,
-  contas: ecraContas, conta: ecraConta, palavra: ecraPalavra,
+  contas: ecraContas, conta: ecraConta, palavra: ecraPalavra, lugares: ecraLugares,
   perdido: () => ecraPerdido(estado.perdido)
 };
 
@@ -1411,6 +1609,8 @@ function desenharCamadas() {
   $('.layout').setAttribute('inert', '');
   const alvo = caixa.querySelector('[data-foco]') || caixa.querySelector('button');
   if (alvo) { try { alvo.focus(); } catch (e) {} }
+
+  activarMapas();
 }
 
 function desenhoDaCamada(c) {
@@ -1418,6 +1618,8 @@ function desenhoDaCamada(c) {
   if (c.tipo === 'anexo') return camadaAnexo(c);
   if (c.tipo === 'confirmar') return camadaConfirmar(c);
   if (c.tipo === 'palavra-de-outro') return camadaPalavraDeOutro(c);
+  if (c.tipo === 'lugar-escrito') return camadaLugarEscrito(c);
+  if (c.tipo === 'lugar-mapa') return camadaLugarMapa(c);
   if (c.tipo === 'previsualizar') return camadaPrevisualizar();
   return '';
 }
@@ -1462,17 +1664,20 @@ function camadaAnexo(c) {
 
   let corpo = '';
   if (l.type === 'map') {
+    const temCoordenadas = d.lat != null && d.lon != null;
+    const paraMaps = temCoordenadas ? d.lat + ',' + d.lon : (d.morada || l.meta || '');
+    const legivel = d.morada || d.titulo || l.meta || '';
     corpo = `
-      <div class="mapa">
-        <div class="mapa__grelha" aria-hidden="true"></div>
-        <span class="mapa__pin">${ico('map')}</span>
-      </div>
-      <p class="visor__morada">${esc(d.morada || l.meta)}</p>
+      ${temCoordenadas
+        ? `<div class="mapa-vivo mapa-vivo--visor" data-mapa-ver="${d.lat},${d.lon}"></div>`
+        : `<div class="mapa"><div class="mapa__grelha" aria-hidden="true"></div><span class="mapa__pin">${ico('map')}</span></div>`}
+      ${d.titulo ? `<p class="visor__titulo-lugar">${esc(d.titulo)}</p>` : ''}
+      ${legivel && legivel !== d.titulo ? `<p class="visor__morada">${esc(legivel)}</p>` : ''}
       <div class="visor__accoes">
-        <a class="btn btn--kraft" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(d.morada || l.meta)}"
+        <a class="btn btn--kraft" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(paraMaps)}"
            target="_blank" rel="noopener">${ico('map')} Abrir no Maps</a>
-        <button class="btn btn--quiet" data-act="copiar" data-valor="${esc(d.morada || l.meta)}"
-                data-msg="Morada copiada.">${ico('copy')} Copiar morada</button>
+        ${legivel ? `<button class="btn btn--quiet" data-act="copiar" data-valor="${esc(legivel)}"
+                data-msg="Morada copiada.">${ico('copy')} Copiar morada</button>` : ''}
       </div>`;
   } else if (l.type === 'pdf') {
     corpo = `
@@ -1512,6 +1717,52 @@ function camadaAnexo(c) {
           <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
         </div>
         ${corpo}
+      </div>
+    </div>`;
+}
+
+function camadaLugarEscrito(c) {
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-l">
+        <p class="dialogo__titulo" id="dlg-l">Onde é</p>
+        <label class="label">Nome do lugar
+          <input class="field" id="lugar-titulo" type="text" data-foco placeholder="Salão cultural da capela">
+        </label>
+        <label class="label">Morada (opcional)
+          <input class="field" id="lugar-morada" type="text" placeholder="Rua de Tomar 45">
+        </label>
+        <div class="dialogo__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada">Cancelar</button>
+          <button class="btn btn--solid" data-act="lugar-guardar-escrito" data-chave="${esc(c.chave)}">Usar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function camadaLugarMapa(c) {
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="visor visor--largo" role="dialog" aria-modal="true" aria-label="Marcar o lugar no mapa">
+        <div class="visor__topo">
+          <span class="visor__titulo">Marcar o lugar</span>
+          <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
+        </div>
+        <p class="nota">Mova o mapa até o alfinete ficar no sítio certo.</p>
+        <div class="mapa-palco">
+          <div class="mapa-vivo" id="mapa-escolher"></div>
+          <span class="mapa-alfinete">${ico('map')}</span>
+        </div>
+        <label class="label">Nome do lugar
+          <input class="field" id="lugar-titulo" type="text" placeholder="Salão cultural da capela">
+        </label>
+        <label class="label">Morada (opcional)
+          <input class="field" id="lugar-morada" type="text" placeholder="Rua de Tomar 45">
+        </label>
+        <div class="visor__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada">Cancelar</button>
+          <button class="btn btn--solid" data-act="lugar-guardar-mapa" data-chave="${esc(c.chave)}">Usar este lugar</button>
+        </div>
       </div>
     </div>`;
 }
@@ -1575,10 +1826,31 @@ function avisoDoRascunho() {
   const heroi = v.imagem || null;
   const fotos = Array.isArray(v.galeria) ? v.galeria : [];
   const links = [];
-  if (v.local) links.push({ type: 'map', label: 'Ver o local no mapa', meta: v.local, destino: { morada: v.local } });
+  const lugar = v.local || null;
+  if (lugar && (lugar.titulo || lugar.morada)) {
+    links.push({
+      type: 'map',
+      label: 'Ver o local no mapa',
+      meta: lugar.titulo || lugar.morada,
+      destino: {
+        titulo: lugar.titulo || '',
+        morada: lugar.morada || '',
+        lat: lugar.lat ?? null,
+        lon: lugar.lon ?? null
+      }
+    });
+  }
   if (v.ligacao) links.push({ type: 'link', label: 'Abrir a ligação', meta: v.ligacao, destino: { url: v.ligacao } });
   if (v.pdf) links.push({ type: 'pdf', label: 'Descarregar o ficheiro', meta: v.pdf.tamanho || '', destino: { url: v.pdf.url, ficheiro: v.pdf.nome, tamanho: v.pdf.tamanho } });
-  if (v.contacto) links.push({ type: 'phone', label: 'Ligar', meta: v.contacto, destino: { numero: v.contacto } });
+  const contacto = v.contacto || {};
+  if (contacto.telefone) {
+    links.push({
+      type: 'phone',
+      label: contacto.nome ? 'Ligar a ' + contacto.nome : 'Ligar',
+      meta: contacto.telefone,
+      destino: { numero: contacto.telefone }
+    });
+  }
 
   const descricao = String(v.texto || '').trim();
   const s = sessao();
@@ -1592,11 +1864,15 @@ function avisoDoRascunho() {
     title: String(v.titulo || '').trim() || 'Sem título',
     summary: descricao.split('\n')[0].slice(0, 140) || 'Sem descrição',
     body: descricao ? descricao.split(/\n{2,}/).map((t) => t.trim()).filter(Boolean) : [],
-    when: v.data ? { day: dataLegivel(v.data), time: horaLegivel(v.data), place: v.local || '' } : null,
+    when: v.data
+      ? { day: dataLegivel(v.data), time: horaLegivel(v.data), place: (lugar && (lugar.titulo || lugar.morada)) || '' }
+      : null,
     hero: heroi,
     gallery: fotos,
     links: links,
-    contact: v.contacto ? { name: (s && s.nome) || '', phone: v.contacto, note: '' } : null,
+    contact: contacto.telefone
+      ? { name: contacto.nome || (s && s.nome) || '', phone: contacto.telefone, note: contacto.nota || '' }
+      : null,
     author: (s && s.nome) || '',
     authorRole: alvos.length ? nomeQuadro(alvos[0]) : '',
     autorId: (s && s.utilizador) || ''
@@ -1646,13 +1922,25 @@ function carregarParaEdicao(p) {
   if (p.hero) juntar('imagem', p.hero);
   if (p.when && p.when.day) estado.valores.data = estado.valores.data || '';
   juntar('texto', (p.body || []).join('\n\n'));
-  if (p.when && p.when.place) juntar('local', p.when.place);
+  const ligacaoMapa = (p.links || []).find((l) => l.type === 'map');
+  if (ligacaoMapa) {
+    const d = ligacaoMapa.destino || {};
+    juntar('local', {
+      titulo: d.titulo || ligacaoMapa.meta || '',
+      morada: d.morada || '',
+      lat: d.lat ?? null, lon: d.lon ?? null
+    });
+  } else if (p.when && p.when.place) {
+    juntar('local', { titulo: p.when.place, morada: '', lat: null, lon: null });
+  }
   if ((p.gallery || []).length) juntar('galeria', p.gallery);
   const lig = (p.links || []).find((l) => l.type === 'link');
   if (lig) juntar('ligacao', (lig.destino && lig.destino.url) || lig.meta);
   const pdf = (p.links || []).find((l) => l.type === 'pdf');
   if (pdf) juntar('pdf', { nome: (pdf.destino && pdf.destino.ficheiro) || pdf.label, tamanho: (pdf.destino && pdf.destino.tamanho) || pdf.meta });
-  if (p.contact && p.contact.phone) juntar('contacto', p.contact.phone);
+  if (p.contact && p.contact.phone) {
+    juntar('contacto', { nome: p.contact.name || '', telefone: p.contact.phone, nota: p.contact.note || '' });
+  }
 
   estado.valores.tipo = p.kind;
   const permitidos = Arquivo.quadrosPermitidos();
@@ -2146,6 +2434,67 @@ const ACCOES = {
 
   'convidar-instalar': () => { if (typeof PWA !== 'undefined') PWA.convidar(); },
 
+  'lugar-novo-escrito': () => abrirCamada({ tipo: 'lugar-escrito', destino: 'guardado', valor: {} }),
+  'lugar-novo-mapa': () => abrirCamada({ tipo: 'lugar-mapa', destino: 'guardado', valor: {} }),
+
+  'pedir-apagar-lugar': (el) => {
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Apagar «' + el.dataset.titulo + '»?',
+      texto: 'Deixa de aparecer como atalho. Os avisos que já o usam ficam como estão.',
+      confirmar: 'Apagar', act: 'confirmar-apagar-lugar', id: el.dataset.id, perigo: true
+    });
+  },
+
+  'confirmar-apagar-lugar': async (el) => {
+    marcarEnvio(el, true);
+    try {
+      await Arquivo.apagarLugar(el.dataset.id);
+      await Arquivo.recarregarLugares();
+      fecharCamada(true);
+      desenhar();
+      aviso('Lugar apagado.');
+    } catch (err) {
+      avisoDeErro(err, null);
+    } finally { marcarEnvio(el, false); }
+  },
+
+  'lugar-guardado': (el) => {
+    const l = Arquivo.lugares().find((x) => x.id === el.dataset.id);
+    if (!l) return;
+    estado.valores[el.dataset.chave] = { titulo: l.titulo, morada: l.morada, lat: l.lat, lon: l.lon };
+    desenhar();
+  },
+
+  'lugar-trocar': (el) => {
+    delete estado.valores[el.dataset.chave];
+    desenhar();
+  },
+
+  'lugar-escrever': (el) => {
+    abrirCamada({ tipo: 'lugar-escrito', chave: el.dataset.chave, valor: {} });
+  },
+
+  'lugar-mapa': (el) => {
+    abrirCamada({ tipo: 'lugar-mapa', chave: el.dataset.chave, valor: {} });
+  },
+
+  'lugar-guardar-escrito': (el) => aplicarLugar(el, null, null),
+
+  'lugar-guardar-mapa': (el) => {
+    const c = estado.camada;
+    if (!c || c.lat == null) { aviso('Mova o mapa até o alfinete ficar no sítio certo.'); return; }
+    return aplicarLugar(el, c.lat, c.lon);
+  },
+
+  'contacto-sou-eu': (el) => {
+    const s = sessao();
+    if (!s) return;
+    const chave = el.dataset.chave;
+    const obj = estado.valores[chave] || (estado.valores[chave] = {});
+    obj.nome = obj.nome === s.nome ? '' : s.nome;
+    desenhar();
+  },
+
   /* --- contas --- */
   'forma-papel': (el) => {
     estado.forma.papel = el.dataset.papel;
@@ -2217,6 +2566,37 @@ const ACCOES = {
   'fechar-aviso': () => limparAviso()
 };
 
+/* O mesmo diálogo serve para escolher o lugar de um aviso e para
+   guardar um lugar habitual: quem o abriu é que decide para onde vai. */
+async function aplicarLugar(el, lat, lon) {
+  const c = estado.camada;
+  const titulo = (($('#lugar-titulo') || {}).value || '').trim();
+  const morada = (($('#lugar-morada') || {}).value || '').trim();
+
+  if (!titulo && !morada) { aviso('Escreva pelo menos o nome do lugar.'); return; }
+  if (lat != null && !titulo) { aviso('Dê um nome ao lugar, para não aparecerem coordenadas.'); return; }
+
+  const lugar = { titulo: titulo || morada, morada: morada, lat: lat, lon: lon };
+
+  if (c && c.destino === 'guardado') {
+    marcarEnvio(el, true);
+    try {
+      await Arquivo.criarLugar(lugar);
+      await Arquivo.recarregarLugares();
+      fecharCamada(true);
+      desenhar();
+      aviso('Lugar guardado.');
+    } catch (err) {
+      avisoDeErro(err, null);
+    } finally { marcarEnvio(el, false); }
+    return;
+  }
+
+  estado.valores[el.dataset.chave] = lugar;
+  fecharCamada(true);
+  desenhar();
+}
+
 /* Redesenhar o formulário apagaria o que já estava escrito: passa-se
    primeiro para o estado. */
 function guardarFormaVisivel() {
@@ -2259,6 +2639,14 @@ document.addEventListener('input', (ev) => {
   if (alvo.id === 'q') {
     estado.query = alvo.value;
     actualizarProcura();
+    return;
+  }
+
+  const composto = alvo.dataset && alvo.dataset.campoSub;
+  if (composto) {
+    const [chaveC, parte] = composto.split(':');
+    const obj = estado.valores[chaveC] || (estado.valores[chaveC] = {});
+    obj[parte] = alvo.value;
     return;
   }
 

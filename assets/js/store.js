@@ -11,6 +11,7 @@ const Arquivo = (function () {
   const cache = {
     avisos: [],
     quadros: [],
+    lugares: [],
     sessao: null
   };
 
@@ -115,7 +116,13 @@ const Arquivo = (function () {
         }
       }
 
-      const [quadros, resposta] = await Promise.all([Api.quadros(), Api.avisos()]);
+      const [quadros, resposta, lugares] = await Promise.all([
+        Api.quadros(),
+        Api.avisos(),
+        // Um problema a ir buscar os lugares não pode impedir a app de abrir.
+        Api.lugares().catch(() => ({ lugares: [] }))
+      ]);
+      cache.lugares = (lugares && lugares.lugares) || [];
 
       // O array BOARDS é partilhado com a camada de vista: enche-se no
       // sítio, para as referências existentes continuarem válidas.
@@ -300,6 +307,16 @@ const Arquivo = (function () {
     porLer: porLer, naoLidos: naoLidos, meus: meus,
     sessao: sessao, ehAdmin: ehAdmin,
     papel: papel, podeGerirContas: podeGerirContas, podePublicar: podePublicar,
+    lugares: () => cache.lugares.slice(),
+    recarregarLugares: async () => {
+      const r = await Api.lugares();
+      cache.lugares = (r && r.lugares) || [];
+      notificar();
+      return cache.lugares;
+    },
+    criarLugar: (d) => Api.criarLugar(d),
+    editarLugar: (id, d) => Api.editarLugar(id, d),
+    apagarLugar: (id) => Api.apagarLugar(id),
     contas: () => Api.contas().then((r) => (r && r.utilizadores) || []),
     criarConta: (d) => Api.criarConta(d),
     editarConta: (id, p) => Api.editarConta(id, p),
