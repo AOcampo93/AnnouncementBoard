@@ -60,12 +60,7 @@ function etiquetaQuadros(p) {
   return nomeQuadro(ids[0]) + ' +' + (ids.length - 1);
 }
 
-function agoraLegivel() {
-  const d = new Date();
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return 'Hoje · ' + hh + ':' + mm;
-}
+const agoraLegivel = () => Datas.agoraLegivel();
 
 /* Uma imagem carregada pelo utilizador desenha-se a sério; a da semente
    continua a ser o marcador tramado do desenho original. */
@@ -457,7 +452,7 @@ function ecraFeed() {
   return `
     <div class="masthead">
       <div class="masthead__text">
-        <p class="eyebrow">Sexta-feira, 21 de agosto</p>
+        <p class="eyebrow">${esc(Datas.hojeLegivel())}</p>
         <h1 class="page-title" tabindex="-1">Novidades</h1>
         <p class="lede" aria-live="polite">
           ${naoLidos > 0

@@ -4,7 +4,7 @@
    guarda respostas da API: os avisos têm de vir sempre frescos.
    ============================================================ */
 
-const VERSAO = 'quadro-v3';
+const VERSAO = 'quadro-v4';
 const CASCA = VERSAO + '-casca';
 
 /* Só o indispensável para a aplicação abrir. O resto entra em cache
@@ -15,6 +15,7 @@ const ESSENCIAIS = [
   './manifest.webmanifest',
   './assets/css/app.css',
   './assets/js/config.js',
+  './assets/js/datas.js',
   './assets/js/data.js',
   './assets/js/api.js',
   './assets/js/store.js',

@@ -46,28 +46,9 @@ const Arquivo = (function () {
 
   /* ---------- datas ---------- */
 
-  const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
-
-  /* O servidor manda o instante; a etiqueta legível calcula-se aqui, no
-     fuso e no relógio de quem está a ler. */
-  function dataRelativa(ts) {
-    if (!ts) return '';
-    const d = new Date(ts);
-    if (isNaN(d)) return '';
-    const agora = new Date();
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-
-    const dia = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-    const diasAtras = Math.round((dia(agora) - dia(d)) / 86400000);
-
-    if (diasAtras === 0) return 'Hoje · ' + hh + ':' + mm;
-    if (diasAtras === 1) return 'Ontem · ' + hh + ':' + mm;
-    if (d.getFullYear() !== agora.getFullYear()) {
-      return d.getDate() + ' ' + MESES[d.getMonth()] + ' ' + d.getFullYear();
-    }
-    return d.getDate() + ' ' + MESES[d.getMonth()];
-  }
+  /* As datas vêm todas do módulo Datas, que as põe na hora de Leiria.
+     Aqui só se guarda o instante; a etiqueta legível é assunto dele. */
+  const dataRelativa = (ts) => Datas.relativa(ts);
 
   /* Acrescenta o que a interface espera e o servidor não precisa de mandar. */
   function normalizar(p) {
