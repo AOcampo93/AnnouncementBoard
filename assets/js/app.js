@@ -40,6 +40,15 @@ const ico = (nome, cls = 'ico') =>
 
 const plural = (n, um, muitos) => n + ' ' + (n === 1 ? um : muitos);
 
+/* «https://www.churchofjesuschrist.org/study?lang=…» -> «churchofjesuschrist.org» */
+function dominioDe(url) {
+  try {
+    return new URL(String(url).trim()).hostname.replace(/^www\./, '');
+  } catch (err) {
+    return String(url || '').replace(/^https?:\/\//, '').split('/')[0].slice(0, 40);
+  }
+}
+
 const quadro = (id) => BOARDS.find((b) => b.id === id) || null;
 const nomeQuadro = (id) => (quadro(id) || {}).name || '';
 
@@ -374,13 +383,41 @@ function selo(p) {
   return porLer(p) ? '<span class="stamp">NOVO</span>' : '';
 }
 
+/* Quando e onde é aquilo que o aviso anuncia. Pode vir do bloco de data
+   ou do lugar marcado no mapa; se não houver nada, não se inventa. */
+function eventoDe(p) {
+  const q = p.when || {};
+  const mapa = (p.links || []).find((l) => l.type === 'map');
+  const lugar = q.place || (mapa && ((mapa.destino && mapa.destino.titulo) || mapa.meta)) || '';
+  if (!q.day && !q.time && !lugar) return null;
+  return { dia: q.day || '', hora: q.time || '', lugar: lugar };
+}
+
+/* A tira que destaca o dia do acontecimento. É o que quase toda a gente
+   procura no aviso, por isso vem antes de tudo menos do título. */
+function tiraDoEvento(p) {
+  const e = eventoDe(p);
+  if (!e) return '';
+  const quando = [e.dia, e.hora].filter(Boolean).join(' · ');
+  return `
+    <span class="quando-tira">
+      ${quando ? `<span class="quando-tira__dia">${ico('calendar')}${esc(quando)}</span>` : ''}
+      ${e.lugar ? `<span class="quando-tira__lugar">${ico('map')}${esc(e.lugar)}</span>` : ''}
+    </span>`;
+}
+
+/* A data em que foi publicado é a menos importante das três: vai no fim
+   e vai com a palavra que a explica, para não se confundir com o resto. */
+function rodapeDePublicacao(p) {
+  return `<span class="notice__publicado">Publicado ${esc(Datas.publicadoEm(p.ts))}</span>`;
+}
+
 function fichaAviso(p) {
   const heroi = p.hero;
   return `
     <button class="notice" data-act="abrir-aviso" data-id="${p.id}">
       <span class="notice__head">
         <span class="notice__board">${esc(etiquetaQuadros(p))}</span>
-        <span class="notice__date tnum">${esc(p.date)}</span>
       </span>
       <span class="notice__body">
         <span class="notice__text">
@@ -389,10 +426,12 @@ function fichaAviso(p) {
             ${selo(p)}
           </span>
           <span class="notice__title">${esc(p.title)}</span>
+          ${tiraDoEvento(p)}
           <span class="notice__summary">${esc(p.summary)}</span>
         </span>
         ${heroi ? `<span class="notice__thumb-wrap">${imagem(heroi, 'notice__thumb', p.title)}</span>` : ''}
       </span>
+      ${rodapeDePublicacao(p)}
     </button>`;
 }
 
@@ -552,12 +591,13 @@ function ecraQuadro() {
           ? lista.map((p) => `
             <button class="pinned" data-act="abrir-aviso" data-id="${p.id}">
               <span class="pinned__meta">
-                <span class="mono tnum">${esc(p.date)}</span>
-                ${selo(p)}
                 <span class="tag tag--plain">${esc(p.kind)}</span>
+                ${selo(p)}
               </span>
               <span class="pinned__title">${esc(p.title)}</span>
+              ${tiraDoEvento(p)}
               <span class="pinned__summary">${esc(p.summary)}</span>
+              ${rodapeDePublicacao(p)}
             </button>`).join('')
           : vazio(
               estado.filtro ? `Não há avisos do tipo «${esc(estado.filtro)}» neste quadro.` : 'Este quadro ainda não tem avisos.',
@@ -592,7 +632,6 @@ function ecraAviso() {
         <div class="post__flags">
           <span class="tag">${esc(p.kind)}</span>
           ${selo(p)}
-          <span class="mono tnum">${esc(p.date)}</span>
         </div>
         <h1 class="post__title" tabindex="-1">${esc(p.title)}</h1>
       </header>
@@ -616,7 +655,7 @@ function ecraAviso() {
             </div>
           </section>` : ''}
 
-        <p class="byline">Publicado por ${esc(p.author)}${p.authorRole ? ' · ' + esc(p.authorRole) : ''}</p>
+        <p class="byline">Publicado por ${esc(p.author)}${p.authorRole ? ' · ' + esc(p.authorRole) : ''}, ${esc(Datas.publicadoEm(p.ts))}</p>
 
         ${relacionados.length ? `
           <section class="relacionados">
@@ -716,9 +755,11 @@ function resultados() {
   }
   return lista.map((p) => `
     <button class="resultcard" data-act="abrir-aviso" data-id="${p.id}">
-      <span class="mono tnum">${esc(etiquetaQuadros(p))} · ${esc(p.date)}</span>
+      <span class="mono">${esc(etiquetaQuadros(p))}</span>
       <span class="resultcard__title">${esc(p.title)}</span>
+      ${tiraDoEvento(p)}
       <span class="flags"><span class="tag tag--plain">${esc(p.kind)}</span>${selo(p)}</span>
+      ${rodapeDePublicacao(p)}
     </button>`).join('');
 }
 
@@ -1835,7 +1876,16 @@ function avisoDoRascunho() {
       }
     });
   }
-  if (v.ligacao) links.push({ type: 'link', label: 'Abrir a ligação', meta: v.ligacao, destino: { url: v.ligacao } });
+  if (v.ligacao) {
+    links.push({
+      type: 'link',
+      label: 'Abrir a ligação',
+      // O endereço inteiro não cabe em lado nenhum e não diz nada a
+      // ninguém: mostra-se o sítio, que é o que interessa saber.
+      meta: dominioDe(v.ligacao),
+      destino: { url: v.ligacao }
+    });
+  }
   if (v.pdf) links.push({ type: 'pdf', label: 'Descarregar o ficheiro', meta: v.pdf.tamanho || '', destino: { url: v.pdf.url, ficheiro: v.pdf.nome, tamanho: v.pdf.tamanho } });
   const contacto = v.contacto || {};
   if (contacto.telefone) {

@@ -69,11 +69,30 @@ const Datas = (function () {
       : `${p.dia} ${p.mes_curto}`;
   }
 
+  /* «hoje às 14:05», «ontem às 19:12», «a 24 de agosto».
+     Vai a seguir à palavra «Publicado», para nunca se confundir com a
+     data do que o aviso anuncia. */
+  function publicadoEm(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d)) return '';
+    const p = emLeiria(d);
+    const diasAtras = diaAbsoluto(new Date()) - diaAbsoluto(d);
+
+    if (diasAtras === 0) return `hoje às ${p.hora}:${p.minuto}`;
+    if (diasAtras === 1) return `ontem às ${p.hora}:${p.minuto}`;
+
+    const anoAgora = emLeiria(new Date()).ano;
+    return p.ano !== anoAgora
+      ? `a ${p.dia} de ${p.mes_extenso} de ${p.ano}`
+      : `a ${p.dia} de ${p.mes_extenso}`;
+  }
+
   /* «Hoje · 14:05», para etiquetar um aviso acabado de publicar. */
   function agoraLegivel() {
     const p = emLeiria(new Date());
     return `Hoje · ${p.hora}:${p.minuto}`;
   }
 
-  return { FUSO, emLeiria, hojeLegivel, relativa, agoraLegivel, diaAbsoluto };
+  return { FUSO, emLeiria, hojeLegivel, relativa, publicadoEm, agoraLegivel, diaAbsoluto };
 })();
