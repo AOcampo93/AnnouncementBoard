@@ -1686,3 +1686,24 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 @media (min-width:768px){
   .quando-tira__dia,.quando-tira__lugar{font-size:17px}
 }
+
+/* Gerir quadros: as fichas mantêm a forma de pasta do resto da app. */
+.quadro-ficha{display:flex;flex-direction:column}
+.quadro-ficha__tab{
+  display:block;width:76px;height:18px;margin-left:8px;
+  background:var(--tan);border:var(--b);border-bottom:0;
+  border-radius:var(--r) var(--r) 0 0;
+}
+.quadro-ficha__corpo{
+  display:flex;flex-wrap:wrap;align-items:center;gap:14px;
+  padding:14px;
+  background:var(--kraft);
+  border:var(--b);border-radius:0 var(--r) var(--r) var(--r);
+  box-shadow:var(--sh-2);
+}
+.quadro-ficha__texto{display:flex;flex-direction:column;gap:3px;flex:1;min-width:160px}
+.quadro-ficha__nome{font:700 20px/1.25 var(--sans);text-wrap:pretty}
+.quadro-ficha__curto{font:400 14px var(--mono);color:var(--mute-2)}
+.quadro-ficha__conta{font:600 15px var(--sans);color:var(--mute)}
+.quadro-ficha__accoes{display:flex;flex-wrap:wrap;gap:10px}
+.quadro-ficha__accoes .btn{flex:1 1 auto;white-space:nowrap}

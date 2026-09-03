@@ -197,6 +197,11 @@ const Api = (function () {
       return pedir('POST', '/ficheiros', { formulario: f });
     },
 
+    /* ----- quadros (criar e alterar é só do bispado) ----- */
+    criarQuadro: (d) => pedir('POST', '/quadros', { corpo: d }),
+    editarQuadro: (id, d) => pedir('PATCH', '/quadros/' + encodeURIComponent(id), { corpo: d }),
+    apagarQuadro: (id) => pedir('DELETE', '/quadros/' + encodeURIComponent(id)),
+
     /* ----- lugares ----- */
     lugares: () => ler('/lugares'),
     criarLugar: (d) => pedir('POST', '/lugares', { corpo: d }),

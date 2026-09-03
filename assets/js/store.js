@@ -334,6 +334,20 @@ const Arquivo = (function () {
     esquecerLidosLocais: () => { lidosLocais.clear(); gravarLidosLocais(); notificar(); },
     sessao: sessao, ehAdmin: ehAdmin,
     papel: papel, podeGerirContas: podeGerirContas, podePublicar: podePublicar,
+    /* Depois de mexer nos quadros é preciso reencher o array partilhado
+       com a camada de vista, senão os ecrãs continuam com a lista velha. */
+    recarregarQuadros: async () => {
+      const quadros = await Api.quadros();
+      cache.quadros = quadros || [];
+      BOARDS.length = 0;
+      cache.quadros.forEach((b) => BOARDS.push(b));
+      notificar();
+      return cache.quadros;
+    },
+    criarQuadro: (d) => Api.criarQuadro(d),
+    editarQuadro: (id, d) => Api.editarQuadro(id, d),
+    apagarQuadro: (id) => Api.apagarQuadro(id),
+
     lugares: () => cache.lugares.slice(),
     recarregarLugares: async () => {
       const r = await Api.lugares();

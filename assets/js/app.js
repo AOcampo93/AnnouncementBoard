@@ -142,10 +142,11 @@ const ROTAS = [
   { re: /^\/contas$/,                ecra: 'contas' },
   { re: /^\/contas\/nova$/,          ecra: 'conta' },
   { re: /^\/contas\/(\d+)$/,         ecra: 'conta', chave: 'contaId' },
-  { re: /^\/lugares$/,               ecra: 'lugares' }
+  { re: /^\/lugares$/,               ecra: 'lugares' },
+  { re: /^\/gerir-quadros$/,         ecra: 'gerirQuadros' }
 ];
 
-const PRIVADAS = ['compose', 'targets', 'mine', 'palavra', 'contas', 'conta', 'lugares'];
+const PRIVADAS = ['compose', 'targets', 'mine', 'palavra', 'contas', 'conta', 'lugares', 'gerirQuadros'];
 
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
 
@@ -235,7 +236,7 @@ function encaminhar() {
     return;
   }
   // Gerir contas é exclusivo do bispado.
-  if ((ecra === 'contas' || ecra === 'conta' || ecra === 'lugares') && temSessao() && !podeGerirContas()) {
+  if (['contas', 'conta', 'lugares', 'gerirQuadros'].indexOf(ecra) > -1 && temSessao() && !podeGerirContas()) {
     substituir('#/a-minha-conta');
     aviso('Só o bispado pode gerir contas.');
     return;
@@ -268,7 +269,8 @@ function encaminhar() {
   const mapa = {
     feed: 'feed', boards: 'boards', board: 'boards', search: 'search',
     login: 'mine', compose: 'mine', targets: 'mine', mine: 'mine',
-    palavra: 'mine', contas: 'mine', conta: 'mine', lugares: 'mine'
+    palavra: 'mine', contas: 'mine', conta: 'mine', lugares: 'mine',
+    gerirQuadros: 'boards'
   };
   if (mapa[ecra]) estado.seccao = mapa[ecra];
 
@@ -529,7 +531,10 @@ function ecraQuadros() {
         <h1 class="page-title" tabindex="-1">Quadros</h1>
         <p class="lede">Escolha uma pasta para ver os seus avisos</p>
       </div>
-      <div class="masthead__actions">${botaoCriar(null)}</div>
+      <div class="masthead__actions">
+        ${botaoCriar(null)}
+        ${podeGerirContas() ? `<button class="btn btn--kraft btn--compacto" data-act="ir" data-hash="#/gerir-quadros">${ico('folder')} Gerir quadros</button>` : ''}
+      </div>
     </div>
     <div class="folders">
       ${BOARDS.map((b) => {
@@ -1361,6 +1366,47 @@ async function desenharNotificacoes() {
     </div>`;
 }
 
+/* ---------- Gerir quadros (só o bispado) ---------- */
+
+function ecraGerirQuadros() {
+  return `
+    ${barra('#/quadros', 'Gerir quadros', {
+      accoes: `<button class="iconbtn" data-act="quadro-novo" aria-label="Novo quadro">${ico('plus')}</button>`
+    })}
+    <div class="wrap stack">
+      <p class="lede">Cada organização tem o seu quadro. Criar um novo passa a estar disponível a quem publica e a quem lê.</p>
+
+      <button class="btn btn--solid btn--block" data-act="quadro-novo">
+        ${ico('plus')} Novo quadro
+      </button>
+
+      <div class="mine-grid stack">
+        ${BOARDS.map((b) => {
+          const n = Arquivo.doQuadro(b.id).length;
+          return `
+            <div class="quadro-ficha">
+              <span class="quadro-ficha__tab"></span>
+              <div class="quadro-ficha__corpo">
+                <div class="quadro-ficha__texto">
+                  <span class="quadro-ficha__nome">${esc(b.name)}</span>
+                  <span class="quadro-ficha__curto mono">separador: ${esc(b.short)}</span>
+                  <span class="quadro-ficha__conta">${plural(n, 'aviso', 'avisos')}</span>
+                </div>
+                <div class="quadro-ficha__accoes">
+                  <button class="btn btn--sm btn--kraft" data-act="quadro-editar" data-id="${b.id}"
+                          data-nome="${esc(b.name)}" data-curto="${esc(b.short)}">${ico('edit')} Editar</button>
+                  <button class="btn btn--sm btn--danger" data-act="pedir-apagar-quadro" data-id="${b.id}"
+                          data-nome="${esc(b.name)}" ${n ? 'disabled title="Tem avisos"' : ''}>${ico('trash')} Apagar</button>
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+
+      <p class="nota">Um quadro com avisos não se pode apagar: os avisos que só estivessem nele desapareciam sem deixar rasto.</p>
+    </div>`;
+}
+
 /* ---------- Lugares guardados ---------- */
 
 function ecraLugares() {
@@ -1536,6 +1582,7 @@ const ECRAS = {
   search: ecraProcurar, login: ecraEntrar, compose: ecraCriar,
   targets: ecraDestino, mine: ecraMinhaConta,
   contas: ecraContas, conta: ecraConta, palavra: ecraPalavra, lugares: ecraLugares,
+  gerirQuadros: ecraGerirQuadros,
   perdido: () => ecraPerdido(estado.perdido)
 };
 
@@ -1654,6 +1701,7 @@ function desenhoDaCamada(c) {
   if (c.tipo === 'anexo') return camadaAnexo(c);
   if (c.tipo === 'confirmar') return camadaConfirmar(c);
   if (c.tipo === 'palavra-de-outro') return camadaPalavraDeOutro(c);
+  if (c.tipo === 'quadro') return camadaQuadro(c);
   if (c.tipo === 'lugar-escrito') return camadaLugarEscrito(c);
   if (c.tipo === 'lugar-mapa') return camadaLugarMapa(c);
   if (c.tipo === 'previsualizar') return camadaPrevisualizar();
@@ -1753,6 +1801,31 @@ function camadaAnexo(c) {
           <button class="iconbtn" data-act="fechar-camada" data-foco aria-label="Fechar">${ico('close')}</button>
         </div>
         ${corpo}
+      </div>
+    </div>`;
+}
+
+function camadaQuadro(c) {
+  const novo = !c.id;
+  return `
+    <div class="camada camada--escura" data-act="fundo">
+      <div class="dialogo" role="dialog" aria-modal="true" aria-labelledby="dlg-q">
+        <p class="dialogo__titulo" id="dlg-q">${novo ? 'Novo quadro' : 'Editar quadro'}</p>
+        <label class="label">Nome
+          <input class="field" id="quadro-nome" type="text" data-foco
+                 value="${esc(c.nome || '')}" placeholder="Quórum de Élderes">
+        </label>
+        <label class="label">Nome curto
+          <input class="field" id="quadro-curto" type="text"
+                 value="${esc(c.curto || '')}" placeholder="Élderes">
+        </label>
+        <p class="nota">O nome curto é o que aparece nos separadores. Se ficar vazio, tira-se do nome.</p>
+        <div class="dialogo__accoes">
+          <button class="btn btn--quiet" data-act="fechar-camada">Cancelar</button>
+          <button class="btn btn--solid" data-act="quadro-guardar" data-id="${esc(c.id || '')}">
+            ${novo ? 'Criar' : 'Guardar'}
+          </button>
+        </div>
       </div>
     </div>`;
 }
@@ -2478,6 +2551,52 @@ const ACCOES = {
   },
 
   'convidar-instalar': () => { if (typeof PWA !== 'undefined') PWA.convidar(); },
+
+  'quadro-novo': () => abrirCamada({ tipo: 'quadro' }),
+
+  'quadro-editar': (el) => abrirCamada({
+    tipo: 'quadro', id: el.dataset.id, nome: el.dataset.nome, curto: el.dataset.curto
+  }),
+
+  'quadro-guardar': async (el) => {
+    const nome = (($('#quadro-nome') || {}).value || '').trim();
+    const curto = (($('#quadro-curto') || {}).value || '').trim();
+    if (!nome) { aviso('O quadro precisa de um nome.'); return; }
+
+    marcarEnvio(el, true);
+    try {
+      if (el.dataset.id) await Arquivo.editarQuadro(el.dataset.id, { name: nome, short: curto });
+      else await Arquivo.criarQuadro({ name: nome, short: curto });
+      await Arquivo.recarregarQuadros();
+      fecharCamada(true);
+      desenhar();
+      aviso(el.dataset.id ? 'Quadro atualizado.' : '«' + nome + '» criado.');
+    } catch (err) {
+      avisoDeErro(err, null);
+    } finally { marcarEnvio(el, false); }
+  },
+
+  'pedir-apagar-quadro': (el) => {
+    abrirCamada({
+      tipo: 'confirmar', titulo: 'Apagar «' + el.dataset.nome + '»?',
+      texto: 'O quadro deixa de existir para toda a gente.',
+      confirmar: 'Apagar', act: 'confirmar-apagar-quadro', id: el.dataset.id, perigo: true
+    });
+  },
+
+  'confirmar-apagar-quadro': async (el) => {
+    marcarEnvio(el, true);
+    try {
+      await Arquivo.apagarQuadro(el.dataset.id);
+      await Arquivo.recarregarQuadros();
+      fecharCamada(true);
+      desenhar();
+      aviso('Quadro apagado.');
+    } catch (err) {
+      fecharCamada(true);
+      avisoDeErro(err, null);
+    } finally { marcarEnvio(el, false); }
+  },
 
   'lugar-novo-escrito': () => abrirCamada({ tipo: 'lugar-escrito', destino: 'guardado', valor: {} }),
   'lugar-novo-mapa': () => abrirCamada({ tipo: 'lugar-mapa', destino: 'guardado', valor: {} }),
