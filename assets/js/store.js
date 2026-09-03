@@ -28,6 +28,20 @@ const Arquivo = (function () {
     catch (err) { return new Set(); }
   })();
 
+  /* Os atalhos de procura que cada pessoa deitou fora. É uma preferência
+     de leitura como a dos avisos lidos: fica no aparelho de quem a fez. */
+  const CHAVE_ATALHOS = 'quadro-avisos.atalhos-ocultos';
+
+  const atalhosOcultos = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(CHAVE_ATALHOS) || '[]')); }
+    catch (err) { return new Set(); }
+  })();
+
+  function gravarAtalhos() {
+    try { localStorage.setItem(CHAVE_ATALHOS, JSON.stringify([...atalhosOcultos])); }
+    catch (err) { /* sem guarda: vale enquanto a página estiver aberta */ }
+  }
+
   function gravarLidosLocais() {
     try {
       // Sem limite a lista cresceria para sempre; os mais antigos caem.
@@ -332,6 +346,11 @@ const Arquivo = (function () {
     avisos: avisos, aviso: aviso, doQuadro: doQuadro,
     porLer: porLer, naoLidos: naoLidos, meus: meus,
     esquecerLidosLocais: () => { lidosLocais.clear(); gravarLidosLocais(); notificar(); },
+
+    atalhosVisiveis: () => QUICK_SEARCHES.filter((t) => !atalhosOcultos.has(t)),
+    haAtalhosOcultos: () => atalhosOcultos.size > 0,
+    ocultarAtalho: (t) => { atalhosOcultos.add(t); gravarAtalhos(); notificar(); },
+    reporAtalhos: () => { atalhosOcultos.clear(); gravarAtalhos(); notificar(); },
     sessao: sessao, ehAdmin: ehAdmin,
     papel: papel, podeGerirContas: podeGerirContas, podePublicar: podePublicar,
     /* Depois de mexer nos quadros é preciso reencher o array partilhado

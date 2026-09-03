@@ -722,16 +722,37 @@ function ecraProcurar() {
           <button class="procura__limpar" type="button" data-act="limpar-procura"
                   ${estado.query ? '' : 'hidden'} aria-label="Limpar a procura">${ico('close')}</button>
         </form>
-        <div class="chips">
-          ${QUICK_SEARCHES.map((q) => `
-            <button class="chip" data-act="atalho" data-q="${esc(q)}"
-                    aria-pressed="${estado.query.trim().toLowerCase() === q.toLowerCase()}">${esc(q)}</button>`).join('')}
-        </div>
+        ${atalhosDeProcura()}
       </div>
     </div>
     <div class="wrap">
       <p class="contagem" id="contagem" aria-live="polite">${textoContagem()}</p>
       <div id="results" class="stack grid-notices">${resultados()}</div>
+    </div>`;
+}
+
+/* Os atalhos são sugestões, não mobiliário: quem não os usa deita-os
+   fora com o X e eles não voltam a aparecer neste aparelho. */
+function atalhosDeProcura() {
+  const visiveis = Arquivo.atalhosVisiveis();
+  const haOcultos = Arquivo.haAtalhosOcultos();
+  if (!visiveis.length && !haOcultos) return '';
+
+  const activo = estado.query.trim().toLowerCase();
+
+  return `
+    <div class="chips chips--atalhos">
+      ${visiveis.map((q) => `
+        <span class="atalho ${activo === q.toLowerCase() ? 'atalho--on' : ''}">
+          <button type="button" class="atalho__texto" data-act="atalho" data-q="${esc(q)}"
+                  aria-pressed="${activo === q.toLowerCase()}">${esc(q)}</button>
+          <button type="button" class="atalho__x" data-act="ocultar-atalho" data-q="${esc(q)}"
+                  aria-label="Retirar o atalho ${esc(q)}">${ico('close')}</button>
+        </span>`).join('')}
+      ${haOcultos ? `
+        <button type="button" class="atalho__repor" data-act="repor-atalhos">
+          ${ico('refresh')} Repor atalhos
+        </button>` : ''}
     </div>`;
 }
 
@@ -2258,6 +2279,22 @@ const ACCOES = {
     actualizarProcura();
   },
 
+  'ocultar-atalho': (el) => {
+    const q = el.dataset.q;
+    Arquivo.ocultarAtalho(q);
+    // Se estava a filtrar por ele, deixa de fazer sentido continuar.
+    if (estado.query.trim().toLowerCase() === q.toLowerCase()) estado.query = '';
+    desenhar();
+    const campo = $('#q');
+    if (campo) campo.value = estado.query;
+  },
+
+  'repor-atalhos': () => {
+    Arquivo.reporAtalhos();
+    desenhar();
+    aviso('Atalhos repostos.');
+  },
+
   'limpar-procura': () => {
     estado.query = '';
     const campo = $('#q');
@@ -2778,8 +2815,12 @@ function actualizarProcura() {
   const limpar = $('[data-act="limpar-procura"].procura__limpar');
   if (limpar) limpar.hidden = !estado.query;
   const q = estado.query.trim().toLowerCase();
-  $$('[data-act="atalho"]').forEach((c) =>
-    c.setAttribute('aria-pressed', String(c.dataset.q.toLowerCase() === q)));
+  $$('[data-act="atalho"]').forEach((c) => {
+    const activo = c.dataset.q.toLowerCase() === q;
+    c.setAttribute('aria-pressed', String(activo));
+    const chip = c.closest('.atalho');
+    if (chip) chip.classList.toggle('atalho--on', activo);
+  });
 }
 
 /* ---------- Escutas ---------- */
