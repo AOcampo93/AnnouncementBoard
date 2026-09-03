@@ -878,7 +878,9 @@ a{color:var(--link)}
   .targets{max-width:720px}
   .mine-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:22px}
 
-  .searchhead{max-width:720px}
+  /* Limitar o cabeçalho inteiro cortava também o risco por baixo dele,
+     que ficava a meio da página. Limita-se o texto, não a faixa. */
+  .searchhead .masthead__text{max-width:720px}
 
   .toast{right:40px;bottom:40px}
 
@@ -886,10 +888,23 @@ a{color:var(--link)}
   .login__title{font-size:46px}
 }
 
+/* Fica fixo de propósito — uma linha de texto larga demais cansa a
+   vista — mas em ecrãs grandes deixar metade vazia é desperdício. Sobe
+   por degraus, e o que cresce são as colunas do quadro, não as linhas. */
 @media (min-width:1400px){
   :root{--shell:1300px}
   .grid-notices{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
   .folders{grid-template-columns:repeat(4,1fr)}
+}
+
+@media (min-width:1700px){
+  :root{--shell:1560px}
+  .folders{grid-template-columns:repeat(5,1fr)}
+}
+
+@media (min-width:2100px){
+  :root{--shell:1840px}
+  .rail{padding:32px 26px}
 }
 
 /* ---------- Movimento reduzido ---------- */
@@ -1549,7 +1564,7 @@ img.lightbox__img{width:100%;height:100%;object-fit:contain;border:0;border-radi
 .notif .btn{flex:0 0 auto}
 
 @media (min-width:1120px){
-  .notif{max-width:640px}
+  .notif{justify-content:space-between}
 }
 
 /* Quem responde a dúvidas nem sempre é quem publica: o nome é um campo
